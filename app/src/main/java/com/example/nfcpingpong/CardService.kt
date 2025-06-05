@@ -12,6 +12,7 @@ import java.util.Arrays
 
 class CardService : HostApduService() {
     private val TAG = "MyHostApduService"
+    private lateinit var walletManager: WalletManager
 
     private val SELECT_OK = byteArrayOf(0x90.toByte(), 0x00)
     private val UNKNOWN   = byteArrayOf(0x6A.toByte(), 0x82.toByte())
@@ -22,6 +23,12 @@ class CardService : HostApduService() {
     private val GET_STRING_CMD = byteArrayOf(0x80.toByte(), 0xCA.toByte(), 0x00, 0x00, 0x00)
     /** PAYMENT command prefix -> 80 CF 00 00 (4 bytes, not 5!) */
     private val PAYMENT_CMD_PREFIX = byteArrayOf(0x80.toByte(), 0xCF.toByte(), 0x00.toByte(), 0x00.toByte())
+
+    override fun onCreate() {
+        super.onCreate()
+        walletManager = WalletManager(this)
+        Log.d(TAG, "CardService created, WalletManager initialized")
+    }
 
     override fun processCommandApdu(commandApdu: ByteArray, extras: Bundle?): ByteArray {
         Log.d(TAG, "Received APDU: ${bytesToHex(commandApdu)} (length: ${commandApdu.size})")
@@ -44,8 +51,21 @@ class CardService : HostApduService() {
         // 2. Reader asks for the payload (GET command)
         if (commandApdu.contentEquals(GET_STRING_CMD)) {
             Log.d(TAG, "Handling GET_STRING command")
-            val payload = "0x03d13d64643F51012BB23e81c4Adf7366F58C33b".toByteArray(Charsets.UTF_8)
-            Log.d(TAG, "GET response: ${String(payload)}")
+            
+            // Get wallet address from saved selection
+            val walletAddress = walletManager.getWalletAddress()
+            val payloadString = walletAddress ?: "0x3f1214074399e56D0D7224056eb7f41c5E8619C4" // fallback
+            
+            val payload = payloadString.toByteArray(Charsets.UTF_8)
+            Log.d(TAG, "GET response: $payloadString (using ${if (walletAddress != null) "saved" else "fallback"} address)")
+            
+            // Send broadcast to update UI
+            if (walletAddress != null) {
+                sendDataToActivity("NFC request handled - sent wallet address: $payloadString")
+            } else {
+                sendDataToActivity("NFC request handled - no wallet selected, sent fallback address")
+            }
+            
             return payload + SELECT_OK        // concat data || SW1 SW2
         }
 
@@ -133,15 +153,52 @@ class CardService : HostApduService() {
     private fun handleEthereumPaymentRequest(ethereumUri: String) {
         Log.i(TAG, "Opening wallet with URI: $ethereumUri")
 
+        // Get the selected wallet
+        val selectedWallet = walletManager.getSelectedWalletInfo()
+        
+        if (selectedWallet != null) {
+            Log.i(TAG, "Using selected wallet: ${selectedWallet.appName} (${selectedWallet.packageName})")
+            
+            try {
+                // Create intent for specific wallet
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(ethereumUri))
+                intent.setPackage(selectedWallet.packageName)
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(intent)
+                
+                Log.i(TAG, "Successfully launched selected wallet: ${selectedWallet.appName}")
+                
+                // Send broadcast to update UI
+                sendDataToActivity("Payment request sent to ${selectedWallet.appName}")
+                return
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to open selected wallet: ${selectedWallet.appName}", e)
+                
+                // Check if wallet is still installed
+                if (!walletManager.isWalletInstalled(selectedWallet.packageName)) {
+                    Log.w(TAG, "Selected wallet is no longer installed, clearing selection")
+                    walletManager.clearSelectedWallet()
+                    sendDataToActivity("Selected wallet not found, please select a new wallet")
+                }
+                
+                // Fall through to generic wallet opening
+            }
+        } else {
+            Log.w(TAG, "No wallet selected, using generic intent")
+            sendDataToActivity("No wallet selected - showing app picker")
+        }
+
+        // Fallback: Use generic intent (original behavior)
         try {
             val intent = Intent(Intent.ACTION_VIEW, Uri.parse(ethereumUri))
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             startActivity(intent)
-            Log.i(TAG, "Successfully launched wallet app")
+            Log.i(TAG, "Successfully launched generic wallet intent")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to open wallet app", e)
+            Log.e(TAG, "Failed to open wallet app with generic intent", e)
 
-            // Fallback: Try to find wallet apps specifically
+            // Final fallback: Try to find wallet apps specifically
             try {
                 val pm = packageManager
                 val activities = pm.queryIntentActivities(
@@ -155,25 +212,28 @@ class CardService : HostApduService() {
                     walletIntent.setPackage(activities[0].activityInfo.packageName)
                     walletIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     startActivity(walletIntent)
+                    sendDataToActivity("Payment request sent to ${activities[0].loadLabel(pm)}")
                 } else {
                     Log.e(TAG, "No wallet apps found to handle ethereum: URIs")
+                    sendDataToActivity("No wallet apps found - please install a wallet app")
 
                     // Try some common wallet package names as last resort
                     val commonWallets = listOf(
-                        "io.metamask",
-                        "me.rainbow",
-                        "org.ethereum.mist",
-                        "com.coinbase.android"
+                        "io.metamask" to "MetaMask",
+                        "me.rainbow" to "Rainbow Wallet",
+                        "org.ethereum.mist" to "Mist Browser",
+                        "com.coinbase.android" to "Coinbase Wallet"
                     )
 
-                    for (packageName in commonWallets) {
+                    for ((packageName, displayName) in commonWallets) {
                         try {
                             pm.getPackageInfo(packageName, 0)
-                            Log.i(TAG, "Trying common wallet: $packageName")
+                            Log.i(TAG, "Trying common wallet: $displayName")
                             val walletIntent = Intent(Intent.ACTION_VIEW, Uri.parse(ethereumUri))
                             walletIntent.setPackage(packageName)
                             walletIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                             startActivity(walletIntent)
+                            sendDataToActivity("Payment request sent to $displayName")
                             break
                         } catch (ex: Exception) {
                             // Wallet not installed, try next
@@ -182,6 +242,7 @@ class CardService : HostApduService() {
                 }
             } catch (fallbackError: Exception) {
                 Log.e(TAG, "All wallet opening attempts failed", fallbackError)
+                sendDataToActivity("Failed to open wallet - please check your wallet apps")
             }
         }
     }

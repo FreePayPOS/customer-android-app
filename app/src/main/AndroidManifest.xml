@@ -9,6 +9,46 @@
     <uses-feature android:name="android.hardware.nfc.hce"
         android:required="true"/>
 
+    <!-- Package visibility queries for Android 11+ to detect wallet apps -->
+    <queries>
+        <!-- Query for apps that can handle ethereum: URIs -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="ethereum" />
+        </intent>
+        
+        <!-- Query for other wallet-related URI schemes -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="wc" />
+        </intent>
+        
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="wallet" />
+        </intent>
+        
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="web3" />
+        </intent>
+        
+        <!-- Specific wallet packages -->
+        <package android:name="io.metamask" />
+        <package android:name="me.rainbow" />
+        <package android:name="com.coinbase.wallet" />
+        <package android:name="com.coinbase.android" />
+        <package android:name="com.wallet.crypto.trustapp" />
+        <package android:name="im.token.app" />
+        <package android:name="co.myst.android" />
+        <package android:name="com.alphawallet.app" />
+        <package android:name="org.walleth" />
+        <package android:name="piuk.blockchain.android" />
+        <package android:name="com.exodus" />
+        <package android:name="com.myetherwallet.mewwallet" />
+        <package android:name="org.ethereum.mist" />
+    </queries>
+
     <application
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -18,7 +58,8 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.NFCPingPong"
-        tools:targetApi="31">
+        tools:targetApi="31"
+        tools:replace="android:dataExtractionRules">
         <activity
             android:name=".MainActivity"
             android:exported="true"
