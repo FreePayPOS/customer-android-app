@@ -28,6 +28,11 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -37,12 +42,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
+import androidx.activity.compose.BackHandler
+import android.content.pm.PackageManager
 
 class MainActivity : ComponentActivity() {
     private var nfcDataState by mutableStateOf("Waiting for NFC data...")
     private var walletSelection by mutableStateOf<WalletSelection?>(null)
-    private var showWalletSelector by mutableStateOf(false)
     private var availableWallets by mutableStateOf<List<WalletApp>>(emptyList())
+    private var showWalletSelection by mutableStateOf(false)
     
     private lateinit var walletManager: WalletManager
     private lateinit var walletConnectManager: WalletConnectManager
@@ -62,26 +69,72 @@ class MainActivity : ComponentActivity() {
         walletManager = WalletManager(this)
         walletConnectManager = WalletConnectManager(this)
 
+        // Comprehensive NFC debugging
+        Log.d(TAG, "=== NFC SETUP DEBUGGING ===")
+        
         val nfcAdapter = NfcAdapter.getDefaultAdapter(this)
         if (nfcAdapter == null) {
-            Log.e(TAG, "Device has no NFC hardware")
+            Log.e(TAG, "❌ Device has no NFC hardware")
+            nfcDataState = "❌ NFC not available on this device"
             return
+        }
+        
+        Log.d(TAG, "✅ NFC adapter found")
+        Log.d(TAG, "NFC enabled: ${nfcAdapter.isEnabled}")
+        
+        if (!nfcAdapter.isEnabled) {
+            Log.w(TAG, "⚠️ NFC is disabled - please enable in device settings")
+            nfcDataState = "⚠️ NFC is disabled - please enable in device settings"
         }
 
         val cardEmulation = CardEmulation.getInstance(nfcAdapter)
         val component = ComponentName(this, CardService::class.java)
+        
+        Log.d(TAG, "CardEmulation instance: $cardEmulation")
+        Log.d(TAG, "CardService component: $component")
 
+        // Check if HCE is supported
+        val packageManager = packageManager
+        val hasHce = packageManager.hasSystemFeature(PackageManager.FEATURE_NFC_HOST_CARD_EMULATION)
+        Log.d(TAG, "HCE supported: $hasHce")
+        
+        if (!hasHce) {
+            Log.e(TAG, "❌ Host Card Emulation not supported on this device")
+            nfcDataState = "❌ Host Card Emulation not supported"
+            return
+        }
+
+        // Register AIDs dynamically
         val ok = try {
-            cardEmulation.registerAidsForService(
+            val result = cardEmulation.registerAidsForService(
                 component,
-                CardEmulation.CATEGORY_OTHER,        // use constant for clarity
+                CardEmulation.CATEGORY_OTHER,
                 listOf("F2222222222222")
             )
+            Log.d(TAG, "Dynamic AID registration result: $result")
+            result
         } catch (e: Exception) {
-            Log.e(TAG, "AID registration failed", e)
+            Log.e(TAG, "❌ AID registration failed", e)
             false
         }
-        Log.i(TAG, "Dynamic AID register result = $ok")
+        
+        if (ok) {
+            Log.i(TAG, "✅ AID registration successful")
+            nfcDataState = "✅ NFC ready - CardService registered"
+        } else {
+            Log.e(TAG, "❌ AID registration failed")
+            nfcDataState = "❌ NFC service registration failed"
+        }
+        
+        // Check if our service is the default for the AID
+        val isDefault = cardEmulation.isDefaultServiceForAid(component, "F2222222222222")
+        Log.d(TAG, "Is default service for AID: $isDefault")
+        
+        // Get list of registered AIDs for our service
+        val registeredAids = cardEmulation.getAidsForService(component, CardEmulation.CATEGORY_OTHER)
+        Log.d(TAG, "Registered AIDs: $registeredAids")
+        
+        Log.d(TAG, "=== END NFC SETUP DEBUGGING ===")
         
         // Load available wallets and selected wallet
         loadWalletInfo()
@@ -90,31 +143,49 @@ class MainActivity : ComponentActivity() {
         setContent {
             NFCPingPongTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    MainContent(
-                        nfcData = nfcDataState,
-                        walletSelection = walletSelection,
-                        onSelectWallet = { showWalletSelector = true },
-                        modifier = Modifier.padding(innerPadding)
-                    )
-                    
-                    // Wallet selection dialog
-                    if (showWalletSelector) {
-                        WalletSelectionDialog(
+                    // Show wallet selection screen if no wallet is selected OR user wants to change wallet
+                    if (walletSelection == null || showWalletSelection) {
+                        WalletSelectionScreen(
                             wallets = availableWallets,
-                            currentSelection = walletSelection,
+                            currentWalletSelection = if (showWalletSelection) walletSelection else null,
                             onWalletSelected = { wallet ->
+                                // Disconnect previous connection when selecting new wallet
+                                if (showWalletSelection) {
+                                    walletConnectManager.disconnect()
+                                    walletManager.clearSelectedWallet()
+                                }
                                 // Try to connect with WalletConnect first
                                 connectToWallet(wallet)
-                                showWalletSelector = false
+                                showWalletSelection = false
                             },
                             onManualAddressEntry = { wallet, address ->
+                                // Disconnect previous connection when entering new address
+                                if (showWalletSelection) {
+                                    walletConnectManager.disconnect()
+                                    walletManager.clearSelectedWallet()
+                                }
                                 // Manual address entry fallback
                                 selectWallet(wallet, address)
-                                showWalletSelector = false
+                                showWalletSelection = false
                             },
-                            onDismiss = { showWalletSelector = false },
+                            onBackToMain = {
+                                // Return to main screen without disconnecting
+                                showWalletSelection = false
+                            },
                             walletManager = walletManager,
-                            walletConnectManager = walletConnectManager
+                            walletConnectManager = walletConnectManager,
+                            modifier = Modifier.padding(innerPadding)
+                        )
+                    } else {
+                        MainContent(
+                            nfcData = nfcDataState,
+                            walletSelection = walletSelection,
+                            onSelectWallet = { 
+                                // Just show wallet selection screen, don't disconnect yet
+                                showWalletSelection = true
+                            },
+                            onTestCardService = { testCardService() },
+                            modifier = Modifier.padding(innerPadding)
                         )
                     }
                 }
@@ -125,11 +196,6 @@ class MainActivity : ComponentActivity() {
             nfcDataReceiver,
             IntentFilter("com.example.nfcpingpong.NFC_DATA_RECEIVED")
         )
-        
-        // Show wallet selector if no wallet is selected
-        if (walletSelection == null && availableWallets.isNotEmpty()) {
-            showWalletSelector = true
-        }
     }
     
     private fun loadWalletInfo() {
@@ -167,17 +233,15 @@ class MainActivity : ComponentActivity() {
                 if (address != null) {
                     Log.i(TAG, "Successfully retrieved address from ${wallet.appName}: $address")
                     selectWallet(wallet, address)
-                    nfcDataState = "Connected to ${wallet.appName}!"
                 } else {
                     Log.w(TAG, "Address retrieval will be completed through guided manual entry")
-                    nfcDataState = "Please complete the connection by entering your address"
-                    // Keep the dialog open for guided manual entry
-                    showWalletSelector = true
+                    nfcDataState = "Please enter your ${wallet.appName} address to complete setup"
+                    // Manual entry will be handled by the WalletSelectionScreen since walletSelection is still null
                 }
                 
             } catch (e: Exception) {
                 Log.e(TAG, "Error connecting to wallet: ${e.message}", e)
-                nfcDataState = "Connection error - please try again"
+                nfcDataState = "Connection error with ${wallet.appName} - please try again"
             }
         }
     }
@@ -186,7 +250,32 @@ class MainActivity : ComponentActivity() {
         walletManager.saveWalletSelection(wallet.packageName, address)
         walletSelection = WalletSelection(wallet, address)
         walletConnectManager.completeConnection(address)
+        nfcDataState = "Ready to use ${wallet.appName} with address: ${address.take(6)}...${address.takeLast(4)}"
         Log.i(TAG, "Selected wallet: ${wallet.appName} (${wallet.packageName}) with address: $address")
+    }
+
+    private fun testCardService() {
+        Log.d(TAG, "=== TESTING CARD SERVICE ===")
+        
+        // Create a test CardService instance to verify it's working
+        val testService = CardService()
+        testService.onCreate()
+        
+        // Test the SELECT command
+        val selectCommand = byteArrayOf(0x00, 0xA4.toByte(), 0x04, 0x00, 0x07, 0xF2.toByte(), 0x22, 0x22, 0x22, 0x22, 0x22, 0x22)
+        Log.d(TAG, "Testing SELECT command...")
+        val selectResponse = testService.processCommandApdu(selectCommand, null)
+        Log.d(TAG, "SELECT response: ${selectResponse.joinToString { String.format("%02X", it) }}")
+        
+        // Test the GET command
+        val getCommand = byteArrayOf(0x80.toByte(), 0xCA.toByte(), 0x00, 0x00, 0x00)
+        Log.d(TAG, "Testing GET command...")
+        val getResponse = testService.processCommandApdu(getCommand, null)
+        Log.d(TAG, "GET response: ${getResponse.joinToString { String.format("%02X", it) }}")
+        
+        Log.d(TAG, "=== END CARD SERVICE TEST ===")
+        
+        nfcDataState = "CardService test completed - check logs"
     }
 
     override fun onDestroy() {
@@ -205,6 +294,7 @@ fun MainContent(
     nfcData: String,
     walletSelection: WalletSelection?,
     onSelectWallet: () -> Unit,
+    onTestCardService: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -229,6 +319,15 @@ fun MainContent(
                     text = nfcData,
                     style = MaterialTheme.typography.bodyMedium
                 )
+                
+                // Add test button for debugging
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(
+                    onClick = onTestCardService,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Test CardService")
+                }
             }
         }
         
@@ -306,111 +405,183 @@ fun MainContent(
 }
 
 @Composable
-fun WalletSelectionDialog(
+fun WalletSelectionScreen(
     wallets: List<WalletApp>,
-    currentSelection: WalletSelection?,
+    currentWalletSelection: WalletSelection? = null,
     onWalletSelected: (WalletApp) -> Unit,
     onManualAddressEntry: (WalletApp, String) -> Unit,
-    onDismiss: () -> Unit,
+    onBackToMain: (() -> Unit)? = null,
     walletManager: WalletManager,
-    walletConnectManager: WalletConnectManager
+    walletConnectManager: WalletConnectManager,
+    modifier: Modifier = Modifier
 ) {
-    var selectedWallet by remember { mutableStateOf(currentSelection?.walletApp) }
+    var selectedWallet by remember { mutableStateOf<WalletApp?>(null) }
     var showManualEntry by remember { mutableStateOf(false) }
-    var walletAddress by remember { mutableStateOf(currentSelection?.walletAddress ?: "") }
+    var walletAddress by remember { mutableStateOf("") }
     var addressError by remember { mutableStateOf<String?>(null) }
     
     // Observe WalletConnect state
     val connectionState by walletConnectManager.connectionState.collectAsState()
     
-    Dialog(onDismissRequest = onDismiss) {
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp)
+    // Handle back button
+    if (onBackToMain != null) {
+        BackHandler {
+            onBackToMain()
+        }
+    }
+    
+    // Auto-switch to manual entry when wallet connection requires it
+    LaunchedEffect(connectionState.connectionStep) {
+        if (connectionState.connectionStep != null && 
+            !connectionState.isConnecting && 
+            connectionState.connectionStep!!.contains("copy your address")) {
+            showManualEntry = true
+        }
+    }
+    
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        // Header with optional back button
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(
-                modifier = Modifier.padding(16.dp)
-            ) {
+            if (onBackToMain != null) {
+                IconButton(onClick = onBackToMain) {
+                    Icon(
+                        imageVector = Icons.Default.ArrowBack,
+                        contentDescription = "Back to main"
+                    )
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+            }
+            
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = if (showManualEntry) "Enter Wallet Address" else "Choose Wallet App",
-                    style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.padding(bottom = 16.dp)
+                    text = if (onBackToMain != null) "Change Wallet" else "Setup Your Wallet",
+                    style = MaterialTheme.typography.headlineMedium,
+                    modifier = Modifier.padding(bottom = 8.dp)
                 )
                 
-                if (connectionState.isConnecting) {
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        CircularProgressIndicator()
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text("Connecting to wallet...")
-                        connectionState.connectionStep?.let { step ->
-                            Text(step, 
-                                 style = MaterialTheme.typography.bodySmall,
-                                 textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-                        }
-                    }
-                } else if (connectionState.connectionStep != null && !connectionState.isConnecting) {
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text("✅ Wallet Opened!", 
-                             color = Color.Green, 
-                             style = MaterialTheme.typography.titleMedium)
-                        Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Choose your preferred wallet for NFC payments",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        
+        // Connection status
+        if (connectionState.isConnecting) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    CircularProgressIndicator()
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "Connecting to wallet...",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    connectionState.connectionStep?.let { step ->
+                        Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            connectionState.connectionStep!!,
+                            step,
                             style = MaterialTheme.typography.bodyMedium,
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center
                         )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Text("Enter your wallet address below:", 
-                             style = MaterialTheme.typography.bodySmall,
-                             color = MaterialTheme.colorScheme.primary)
-                        
-                        // Auto-switch to manual entry
-                        showManualEntry = true
                     }
-                } else if (connectionState.isConnected && connectionState.address != null) {
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text("✅ Connected!", color = Color.Green, style = MaterialTheme.typography.titleMedium)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text("Address: ${connectionState.address}")
-                        Text("Connection successful!", style = MaterialTheme.typography.bodySmall)
-                    }
-                } else if (connectionState.error != null) {
-                    Column {
+                }
+            }
+        } else if (connectionState.connectionStep != null && !connectionState.isConnecting) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.secondaryContainer
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        "✅ Wallet Connected!",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        connectionState.connectionStep!!,
+                        style = MaterialTheme.typography.bodyMedium,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                }
+            }
+        }
+        
+        // Error display
+        if (connectionState.error != null) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer
+                )
+            ) {
+                Text(
+                    text = "Error: ${connectionState.error}",
+                    modifier = Modifier.padding(16.dp),
+                    color = MaterialTheme.colorScheme.onErrorContainer
+                )
+            }
+        }
+        
+        if (showManualEntry) {
+            // Manual address entry screen
+            Card(
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp)
+                ) {
+                    Text(
+                        text = "Enter Your Wallet Address",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(bottom = 16.dp)
+                    )
+                    
+                    if (selectedWallet != null) {
                         Text(
-                            text = "Connection Error:",
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.titleMedium
+                            text = "Selected wallet: ${selectedWallet!!.appName}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(bottom = 16.dp)
                         )
+                    } else {
                         Text(
-                            text = connectionState.error!!,
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall
+                            text = "Manual wallet address entry",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(bottom = 16.dp)
                         )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text("You can try manual entry below:", style = MaterialTheme.typography.bodySmall)
-                        Button(onClick = { showManualEntry = true }) {
-                            Text("Manual Entry")
-                        }
                     }
-                } else if (showManualEntry) {
-                    // Manual address entry
+                    
                     OutlinedTextField(
                         value = walletAddress,
                         onValueChange = { 
                             walletAddress = it
                             addressError = null
                         },
-                        label = { Text("0x...") },
+                        label = { Text("Wallet Address") },
                         placeholder = { Text("0x1234567890abcdef...") },
                         modifier = Modifier.fillMaxWidth(),
                         isError = addressError != null,
@@ -421,122 +592,229 @@ fun WalletSelectionDialog(
                                     color = MaterialTheme.colorScheme.error
                                 )
                             } else {
-                                Text("Enter your Ethereum wallet address (42 characters starting with 0x)")
+                                Text("Paste your Ethereum wallet address (42 characters starting with 0x)")
                             }
                         },
                         singleLine = true
                     )
-                } else if (wallets.isEmpty()) {
-                    Text(
-                        text = "No wallet apps found. Please install a wallet app that supports Ethereum.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(bottom = 16.dp)
-                    )
-                } else {
-                    // Wallet selection
-                    Text(
-                        text = "Select Wallet App:",
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.padding(bottom = 8.dp)
-                    )
                     
-                    LazyColumn(
-                        modifier = Modifier.heightIn(max = 200.dp)
+                    Spacer(modifier = Modifier.height(16.dp))
+                    
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        items(wallets) { wallet ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .selectable(
-                                        selected = wallet.packageName == selectedWallet?.packageName,
-                                        onClick = { selectedWallet = wallet }
-                                    )
-                                    .padding(vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                RadioButton(
-                                    selected = wallet.packageName == selectedWallet?.packageName,
-                                    onClick = { selectedWallet = wallet }
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Column {
-                                    Text(
-                                        text = wallet.appName,
-                                        style = MaterialTheme.typography.bodyMedium
-                                    )
-                                    Text(
-                                        text = wallet.packageName,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
+                        OutlinedButton(
+                            onClick = { 
+                                if (onBackToMain != null && selectedWallet == null) {
+                                    // If we're changing wallet and no wallet selected, go back to main
+                                    onBackToMain()
+                                } else {
+                                    // Otherwise go back to wallet selection
+                                    showManualEntry = false 
                                 }
-                            }
-                        }
-                    }
-                    
-                    if (connectionState.error != null) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = "Error: ${connectionState.error}",
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                }
-                
-                Spacer(modifier = Modifier.height(16.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)
-                ) {
-                    TextButton(onClick = onDismiss) {
-                        Text("Cancel")
-                    }
-                    
-                    if (showManualEntry) {
-                        TextButton(onClick = { showManualEntry = false }) {
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
                             Text("Back")
                         }
                         
                         Button(
                             onClick = {
-                                if (selectedWallet == null) return@Button
-                                
                                 val trimmedAddress = walletAddress.trim()
                                 if (!walletManager.isValidEthereumAddress(trimmedAddress)) {
                                     addressError = "Invalid Ethereum address format"
                                     return@Button
                                 }
                                 
-                                onManualAddressEntry(selectedWallet!!, trimmedAddress)
+                                // If no wallet selected, create a generic wallet entry
+                                val walletToSave = selectedWallet ?: WalletApp(
+                                    packageName = "manual_entry",
+                                    appName = "Manual Entry"
+                                )
+                                
+                                onManualAddressEntry(walletToSave, trimmedAddress)
                             },
-                            enabled = selectedWallet != null && walletAddress.trim().isNotEmpty()
+                            enabled = walletAddress.trim().isNotEmpty(),
+                            modifier = Modifier.weight(1f)
                         ) {
-                            Text("Save")
+                            Text("Save Wallet")
                         }
-                    } else if (connectionState.isConnected && connectionState.address != null) {
+                    }
+                }
+            }
+        } else if (wallets.isEmpty()) {
+            // No wallets found
+            Card(
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "No Wallet Apps Found",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Please install a wallet app that supports Ethereum, such as MetaMask, Rainbow, or Coinbase Wallet.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                }
+            }
+        } else {
+            // Wallet selection
+            Card(
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp)
+                ) {
+                    Text(
+                        text = "Available Wallets",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(bottom = 16.dp)
+                    )
+                    
+                    LazyColumn(
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(wallets) { wallet ->
+                            val isCurrentlyConnected = currentWalletSelection?.walletApp?.packageName == wallet.packageName
+                            
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth(),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = if (isCurrentlyConnected) {
+                                        MaterialTheme.colorScheme.primaryContainer
+                                    } else {
+                                        MaterialTheme.colorScheme.surface
+                                    }
+                                ),
+                                border = if (isCurrentlyConnected) {
+                                    BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
+                                } else {
+                                    null
+                                },
+                                onClick = if (isCurrentlyConnected) {
+                                    {} // Don't allow clicking on currently connected wallet
+                                } else {
+                                    {
+                                        selectedWallet = wallet
+                                        onWalletSelected(wallet)
+                                    }
+                                }
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(16.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Column {
+                                            Text(
+                                                text = wallet.appName,
+                                                style = MaterialTheme.typography.bodyLarge,
+                                                color = if (isCurrentlyConnected) {
+                                                    MaterialTheme.colorScheme.onPrimaryContainer
+                                                } else {
+                                                    MaterialTheme.colorScheme.onSurface
+                                                }
+                                            )
+                                            Text(
+                                                text = wallet.packageName,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = if (isCurrentlyConnected) {
+                                                    MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                                                } else {
+                                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                                }
+                                            )
+                                            
+                                            if (isCurrentlyConnected && currentWalletSelection != null) {
+                                                Spacer(modifier = Modifier.height(4.dp))
+                                                Text(
+                                                    text = "✓ Connected",
+                                                    style = MaterialTheme.typography.labelMedium,
+                                                    color = MaterialTheme.colorScheme.primary,
+                                                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                                                )
+                                                Text(
+                                                    text = "Address: ${currentWalletSelection.walletAddress.take(10)}...${currentWalletSelection.walletAddress.takeLast(6)}",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                                                )
+                                            }
+                                        }
+                                    }
+                                    
+                                    if (isCurrentlyConnected) {
+                                        Icon(
+                                            imageVector = Icons.Default.CheckCircle,
+                                            contentDescription = "Currently connected",
+                                            tint = MaterialTheme.colorScheme.primary
+                                        )
+                                    } else {
+                                        Icon(
+                                            imageVector = Icons.Default.PlayArrow,
+                                            contentDescription = "Connect to ${wallet.appName}",
+                                            tint = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Manual entry option
+            if (connectionState.isConnected && connectionState.address != null) {
+                Card(
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp)
+                    ) {
                         Button(
                             onClick = {
                                 selectedWallet?.let { wallet ->
                                     onManualAddressEntry(wallet, connectionState.address!!)
                                 }
                             },
-                            enabled = selectedWallet != null
+                            enabled = selectedWallet != null,
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("Save Address")
+                            Text("Save Connected Address")
                         }
-                    } else {
-                        TextButton(onClick = { showManualEntry = true }) {
-                            Text("Manual Entry")
-                        }
-                        
-                        Button(
-                            onClick = {
-                                selectedWallet?.let { onWalletSelected(it) }
-                            },
-                            enabled = selectedWallet != null && !connectionState.isConnecting
+                    }
+                }
+            } else {
+                Card(
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp)
+                    ) {
+                        Text(
+                            text = "Don't see your wallet?",
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        )
+                        OutlinedButton(
+                            onClick = { showManualEntry = true },
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("Connect")
+                            Text("Enter Address Manually")
                         }
                     }
                 }

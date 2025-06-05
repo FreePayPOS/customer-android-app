@@ -26,12 +26,31 @@ class CardService : HostApduService() {
 
     override fun onCreate() {
         super.onCreate()
-        walletManager = WalletManager(this)
-        Log.d(TAG, "CardService created, WalletManager initialized")
+        Log.d(TAG, "🚀 CardService.onCreate() called")
+        
+        try {
+            walletManager = WalletManager(this)
+            Log.d(TAG, "✅ WalletManager initialized successfully")
+            
+            // Verify initialization
+            val selectedWallet = walletManager.getSelectedWalletInfo()
+            val walletAddress = walletManager.getWalletAddress()
+            Log.d(TAG, "Initial state - Selected wallet: ${selectedWallet?.appName}, Address: $walletAddress")
+            
+            Log.d(TAG, "✅ CardService fully initialized and ready")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error initializing CardService", e)
+        }
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Log.d(TAG, "🔄 CardService.onStartCommand() called")
+        return super.onStartCommand(intent, flags, startId)
     }
 
     override fun processCommandApdu(commandApdu: ByteArray, extras: Bundle?): ByteArray {
-        Log.d(TAG, "Received APDU: ${bytesToHex(commandApdu)} (length: ${commandApdu.size})")
+        Log.d(TAG, "📨 APDU RECEIVED! Length: ${commandApdu.size}")
+        Log.d(TAG, "📨 Raw APDU: ${bytesToHex(commandApdu)}")
 
         // Extract command components for debugging
         if (commandApdu.size >= 4) {
@@ -39,34 +58,42 @@ class CardService : HostApduService() {
             val ins = commandApdu[1]
             val p1 = commandApdu[2]
             val p2 = commandApdu[3]
-            Log.d(TAG, "Command: CLA=${String.format("%02X", cla)} INS=${String.format("%02X", ins)} P1=${String.format("%02X", p1)} P2=${String.format("%02X", p2)}")
+            Log.d(TAG, "📨 Command: CLA=${String.format("%02X", cla)} INS=${String.format("%02X", ins)} P1=${String.format("%02X", p1)} P2=${String.format("%02X", p2)}")
         }
+
+        // Send broadcast that we received an APDU
+        sendDataToActivity("🔄 NFC reader connected - processing request...")
 
         // 1. Reader selects our AID
         if (commandApdu.startsWith(SELECT_PREFIX)) {
-            Log.d(TAG, "Handling SELECT command")
+            Log.d(TAG, "✅ Handling SELECT command")
+            sendDataToActivity("✅ NFC handshake established")
             return SELECT_OK
         }
 
         // 2. Reader asks for the payload (GET command)
         if (commandApdu.contentEquals(GET_STRING_CMD)) {
-            Log.d(TAG, "Handling GET_STRING command")
+            Log.d(TAG, "✅ Handling GET_STRING command")
             
             // Get wallet address from saved selection
             val walletAddress = walletManager.getWalletAddress()
-            val payloadString = walletAddress ?: "0x3f1214074399e56D0D7224056eb7f41c5E8619C4" // fallback
+            val selectedWallet = walletManager.getSelectedWalletInfo()
             
-            val payload = payloadString.toByteArray(Charsets.UTF_8)
-            Log.d(TAG, "GET response: $payloadString (using ${if (walletAddress != null) "saved" else "fallback"} address)")
+            Log.d(TAG, "Current state - Selected wallet: ${selectedWallet?.appName}, Address: $walletAddress")
             
-            // Send broadcast to update UI
             if (walletAddress != null) {
-                sendDataToActivity("NFC request handled - sent wallet address: $payloadString")
+                val payload = walletAddress.toByteArray(Charsets.UTF_8)
+                Log.d(TAG, "✅ GET response: Using saved address: $walletAddress")
+                sendDataToActivity("✅ Sent wallet address: ${walletAddress.take(6)}...${walletAddress.takeLast(4)}")
+                return payload + SELECT_OK
             } else {
-                sendDataToActivity("NFC request handled - no wallet selected, sent fallback address")
+                // Fallback address
+                val fallbackAddress = "0x3f1214074399e56D0D7224056eb7f41c5E8619C4"
+                val payload = fallbackAddress.toByteArray(Charsets.UTF_8)
+                Log.d(TAG, "⚠️ GET response: Using fallback address: $fallbackAddress")
+                sendDataToActivity("⚠️ No wallet configured - sent fallback address")
+                return payload + SELECT_OK
             }
-            
-            return payload + SELECT_OK        // concat data || SW1 SW2
         }
 
         // 3. Handle PAYMENT command (80CF0000 + NDEF data)
@@ -405,7 +432,18 @@ class CardService : HostApduService() {
 
     override fun onDeactivated(reason: Int) {
         // Called when link is lost (card removed, reader moved away, etc.)
-        Log.d(TAG, "HCE deactivated, reason: $reason")
+        val reasonStr = when (reason) {
+            DEACTIVATION_LINK_LOSS -> "LINK_LOSS"
+            DEACTIVATION_DESELECTED -> "DESELECTED"
+            else -> "UNKNOWN($reason)"
+        }
+        Log.d(TAG, "💔 HCE deactivated, reason: $reasonStr")
+        sendDataToActivity("💔 NFC connection lost")
+    }
+    
+    override fun onDestroy() {
+        Log.d(TAG, "💀 CardService.onDestroy() called")
+        super.onDestroy()
     }
 }
 

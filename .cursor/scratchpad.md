@@ -155,6 +155,130 @@ The wallet selection system now provides:
 
 This implementation **successfully provides the automatic address retrieval functionality** requested through an intelligent guided approach that actually works in production! 🎯
 
+### Latest Update - UI/UX Improvements ✅
+**FIXED USER REPORTED ISSUES:**
+- [x] **Missing input field issue**: Fixed logic that was preventing manual address entry field from showing properly
+- [x] **Modal to full-screen**: Replaced `WalletSelectionDialog` (modal) with `WalletSelectionScreen` (full-screen experience)
+- [x] **Immediate wallet selection**: Wallet selection is now the primary screen when no wallet is configured
+- [x] **Clear CTA**: "Select Wallet" button is the primary action when app starts
+
+**Key UI/UX Changes:**
+- ✅ **Full-screen wallet selection** replaces small modal dialog
+- ✅ **Primary onboarding flow** - wallet selection appears immediately on first launch
+- ✅ **Clear visual hierarchy** with better spacing, cards, and typography
+- ✅ **Improved manual entry** with clear instructions and validation feedback
+- ✅ **Enhanced connection status** with color-coded cards and progress indicators
+- ✅ **Consistent button sizing** with full-width CTAs and proper button hierarchy
+- ✅ **Better wallet display** with highlighted selection and visual feedback
+
+**Technical Implementation:**
+- ✅ Replaced `Dialog` composable with full-screen `Column` layout
+- ✅ Added proper `LaunchedEffect` for auto-switching to manual entry
+- ✅ Implemented conditional rendering based on `walletSelection` state
+- ✅ Added `CardDefaults.cardColors()` for proper status visualization
+- ✅ Enhanced button layout with weight distribution and proper spacing
+
+**User Flow Now:**
+1. **App Launch** → Full-screen wallet selection if no wallet configured
+2. **Select Wallet** → Clear selection with visual feedback and highlighted cards
+3. **Connect Button** → Prominent CTA to start connection process
+4. **Connection Status** → Full-screen status cards with progress and instructions
+5. **Manual Entry** → Full-screen form with clear validation and guidance
+6. **Main App** → Only shown after wallet is fully configured
+
+This provides a much better first-time user experience with clear guidance and no confusing modals!
+
+### Latest Update - Direct Wallet Selection ✅
+**FIXED WALLET SELECTION UX:**
+- [x] **Direct wallet buttons**: Each wallet is now a clickable button that immediately starts connection
+- [x] **Removed selection step**: No more separate "Connect" button - clicking wallet directly connects
+- [x] **Visual improvements**: Added play arrow icons and better button styling
+- [x] **Manual entry independence**: Manual entry now works without requiring wallet selection first
+
+**Key UX Changes:**
+- ✅ **One-click wallet connection** - tap a wallet to immediately connect
+- ✅ **Clear button affordance** - each wallet card is clearly a button with play icon
+- ✅ **Removed intermediate selection** - no more "select then connect" - just tap and go
+- ✅ **Independent manual entry** - manual entry accessible without selecting a wallet first
+- ✅ **Better visual hierarchy** - wallet cards look like buttons with proper spacing
+
+**Technical Implementation:**
+- ✅ Replaced `selectable()` with `onClick()` on wallet cards
+- ✅ Added play arrow icons to indicate clickable action
+- ✅ Removed separate action buttons section
+- ✅ Updated manual entry to work without `selectedWallet` requirement
+- ✅ Added generic "Manual Entry" wallet type for address-only setup
+
+**User Flow Now:**
+1. **App Launch** → Full-screen wallet selection
+2. **Tap Wallet** → Immediately starts connection to that wallet  
+3. **Connection Process** → Real-time status and guidance
+4. **Manual Entry Option** → Available as "Don't see your wallet?" button
+5. **Address Entry** → Works independently or with selected wallet
+6. **Main App** → Shows after setup complete
+
+Much more intuitive - users can now tap any wallet to immediately connect!
+
+### Latest Update - Better Navigation & State Management ✅
+**FIXED NAVIGATION AND STATE ISSUES:**
+- [x] **Persistent connection state**: Fixed "Wallet Connected" message showing when changing wallets
+- [x] **Proper back navigation**: Added back button and BackHandler to prevent app minimizing
+- [x] **Smart disconnect logic**: Only disconnect when selecting new wallet, not when browsing
+- [x] **Clear visual hierarchy**: "Change Wallet" vs "Setup Your Wallet" titles
+
+**Key UX Changes:**
+- ✅ **Clean wallet selection**: No stale connection state when changing wallets
+- ✅ **Proper back button**: Hardware/software back returns to main screen instead of minimizing
+- ✅ **Smart state management**: Connection state preserved when browsing, cleared when selecting new wallet
+- ✅ **Clear visual cues**: Header shows "Change Wallet" vs "Setup Your Wallet" appropriately
+- ✅ **Contextual navigation**: Back button appears only when changing existing wallet
+
+**Technical Implementation:**
+- ✅ Added `showWalletSelection` state to track navigation context
+- ✅ Added `onBackToMain` callback for proper navigation handling  
+- ✅ Added `BackHandler` to override system back button behavior
+- ✅ Added back arrow icon in header when changing existing wallet
+- ✅ Smart disconnect logic only triggers on actual wallet selection, not browsing
+
+**User Flow Now:**
+1. **Main Screen** → Shows current wallet with "Change Wallet" button
+2. **Change Wallet** → Shows wallet selection with back button and "Change Wallet" title
+3. **Browse Wallets** → Connection state preserved, can go back without losing setup
+4. **Select New Wallet** → Previous connection cleared, new connection starts
+5. **Back Navigation** → Hardware/software back properly returns to main screen
+
+Perfect navigation behavior - users can browse wallet options without losing their current setup, and only disconnect when they actually select a different wallet!
+
+### Latest Update - Current Wallet Highlighting ✅
+**ENHANCED WALLET SELECTION VISIBILITY:**
+- [x] **Highlight connected wallet**: Currently connected wallet stands out with primary container color and border
+- [x] **Connection status**: Shows "✓ Connected" and truncated address below current wallet
+- [x] **Visual differentiation**: Check circle icon vs play arrow for connected vs available wallets
+- [x] **Prevent re-selection**: Currently connected wallet is not clickable (no action needed)
+
+**Key UX Changes:**
+- ✅ **Clear visual hierarchy**: Connected wallet has distinct styling (primary container + border)
+- ✅ **Status information**: Shows "✓ Connected" and "Address: 0x1234...abcd" below current wallet
+- ✅ **Icon differentiation**: Check circle for connected, play arrow for available wallets  
+- ✅ **Smart interaction**: Can't click on already connected wallet (prevents confusion)
+- ✅ **Address truncation**: Shows first 10 and last 6 characters for readability
+
+**Technical Implementation:**
+- ✅ Added `currentWalletSelection` parameter to `WalletSelectionScreen`
+- ✅ Added comparison logic to identify currently connected wallet
+- ✅ Conditional styling with `primaryContainer` colors and border
+- ✅ Added connection status text with truncated address display
+- ✅ Smart onClick behavior - disabled for connected wallet
+- ✅ Icon switching between CheckCircle and PlayArrow
+
+**User Flow Now:**
+1. **Change Wallet** → Opens selection screen with current wallet highlighted
+2. **Current Wallet** → Clearly marked with "✓ Connected", address, and check icon
+3. **Available Wallets** → Show with play arrow, clickable to connect
+4. **Visual Clarity** → Easy to see current vs available options at a glance
+
+Users can now instantly see which wallet is currently connected and easily browse alternatives!
+
 ## Lessons
 - Include info useful for debugging in the program output
 - Read the file before you try to edit it
