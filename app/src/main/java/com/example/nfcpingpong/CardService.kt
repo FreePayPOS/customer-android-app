@@ -10,9 +10,6 @@ import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import java.nio.charset.StandardCharsets
 import java.util.Arrays
 
-
-
-
 class CardService : HostApduService() {
     private val TAG = "MyHostApduService"
 
@@ -21,99 +18,170 @@ class CardService : HostApduService() {
 
     /** APDU sent by reader to select our application */
     private val SELECT_PREFIX = byteArrayOf(0x00, 0xA4.toByte(), 0x04, 0x00)
-    /** Our invented “GET_STRING” APDU -> 80 CA 00 00 00 */
+    /** Our invented "GET_STRING" APDU -> 80 CA 00 00 00 */
     private val GET_STRING_CMD = byteArrayOf(0x80.toByte(), 0xCA.toByte(), 0x00, 0x00, 0x00)
-    private val APDU_PREFIX_TO_MATCH = byteArrayOf(0x80.toByte(), 0xCF.toByte(), 0x00.toByte(), 0x00.toByte(), 0x00.toByte())
+    /** PAYMENT command prefix -> 80 CF 00 00 (4 bytes, not 5!) */
+    private val PAYMENT_CMD_PREFIX = byteArrayOf(0x80.toByte(), 0xCF.toByte(), 0x00.toByte(), 0x00.toByte())
 
     override fun processCommandApdu(commandApdu: ByteArray, extras: Bundle?): ByteArray {
+        Log.d(TAG, "Received APDU: ${bytesToHex(commandApdu)} (length: ${commandApdu.size})")
+
+        // Extract command components for debugging
+        if (commandApdu.size >= 4) {
+            val cla = commandApdu[0]
+            val ins = commandApdu[1]
+            val p1 = commandApdu[2]
+            val p2 = commandApdu[3]
+            Log.d(TAG, "Command: CLA=${String.format("%02X", cla)} INS=${String.format("%02X", ins)} P1=${String.format("%02X", p1)} P2=${String.format("%02X", p2)}")
+        }
+
         // 1. Reader selects our AID
         if (commandApdu.startsWith(SELECT_PREFIX)) {
+            Log.d(TAG, "Handling SELECT command")
             return SELECT_OK
         }
-        // 2. Reader asks for the payload
+
+        // 2. Reader asks for the payload (GET command)
         if (commandApdu.contentEquals(GET_STRING_CMD)) {
+            Log.d(TAG, "Handling GET_STRING command")
             val payload = "0x03d13d64643F51012BB23e81c4Adf7366F58C33b".toByteArray(Charsets.UTF_8)
+            Log.d(TAG, "GET response: ${String(payload)}")
             return payload + SELECT_OK        // concat data || SW1 SW2
         }
 
-        Log.d(TAG, "Received APDU: ${commandApdu.toString()}")
-
-        if (commandApdu.size >= APDU_PREFIX_TO_MATCH.size &&
-            commandApdu.take(APDU_PREFIX_TO_MATCH.size).toByteArray().contentEquals(APDU_PREFIX_TO_MATCH)
+        // 3. Handle PAYMENT command (80CF0000 + NDEF data)
+        if (commandApdu.size >= PAYMENT_CMD_PREFIX.size &&
+            commandApdu.take(PAYMENT_CMD_PREFIX.size).toByteArray().contentEquals(PAYMENT_CMD_PREFIX)
         ) {
-            // The APDU starts with 80CF000000
-            if (commandApdu.size > APDU_PREFIX_TO_MATCH.size) {
-                // Extract the rest of the data
-                val dataPayload = commandApdu.drop(APDU_PREFIX_TO_MATCH.size).toByteArray()
-                val dataString = dataPayload.toString(Charsets.UTF_8) // Or convert to String if it's text data
+            Log.d(TAG, "Handling PAYMENT command")
 
-                Log.i(TAG, "Matching APDU received. Data: $dataString")
+            // Extract NDEF data (everything after the 4-byte command)
+            if (commandApdu.size > PAYMENT_CMD_PREFIX.size) {
+                val ndefData = commandApdu.drop(PAYMENT_CMD_PREFIX.size).toByteArray()
+                Log.d(TAG, "NDEF data: ${bytesToHex(ndefData)} (length: ${ndefData.size})")
 
-                // Display the data on the screen (e.g., using a Toast)
-                // For a more persistent display, you might send a broadcast to an Activity
-                // or update a LiveData object.
-                // Running on a background thread, so use runOnUiThread for UI updates
-                // if you were in an Activity context. Here, Toast is simpler for demonstration.
-                // Consider using a Handler to post to the main thread if needed.
-//                val message = "Received Data: $dataString"
-                // Toast messages from a service can be tricky as they need a context.
-                // For simplicity in this example, we'll log it.
-                // To show a Toast, you'd typically need to pass context or use a Handler.
-//                println("NFC Data Received: $message") // Prints to Logcat, visible in Android Studio
-
-//                sendDataToActivity(message)
-                return handleNDEFPaymentRequest(dataPayload)
-                // You might want to send this data to your UI.
-                // For example, using a LocalBroadcastManager or a SharedViewModel.
+                return handleNDEFPaymentRequest(ndefData)
             } else {
-                Log.w(TAG, "Matching APDU prefix, but no additional data.")
-                return SELECT_OK // Or an error indicating missing data if expected
+                Log.w(TAG, "PAYMENT command received but no NDEF data")
+                return byteArrayOf(0x6A.toByte(), 0x80.toByte()) // Wrong data
             }
         }
 
-        // 3. Anything else -> “file not found”
+        // 4. Unknown command
+        Log.w(TAG, "Unknown command received")
         return UNKNOWN
     }
 
     private fun handleNDEFPaymentRequest(ndefData: ByteArray): ByteArray {
+        Log.d(TAG, "Processing NDEF payment request...")
+
         // Parse NDEF and extract the ethereum: URI
-        // Then create an Intent to open the wallet app
         val ethereumUri: String? = this.parseEthereumUriFromNDEF(ndefData)
 
         if (ethereumUri != null) {
+            Log.i(TAG, "Successfully parsed Ethereum URI: $ethereumUri")
+
+            // Parse chain ID from URI for additional logging
+            val chainId = extractChainIdFromUri(ethereumUri)
+            if (chainId != null) {
+                Log.i(TAG, "Detected chain ID: $chainId")
+                val chainName = getChainName(chainId)
+                Log.i(TAG, "Chain: $chainName")
+            }
+
             handleEthereumPaymentRequest(ethereumUri)
             return byteArrayOf(0x90.toByte(), 0x00.toByte()) // Success
         } else {
-            Log.e("HCE", "Failed to parse Ethereum URI from NDEF")
+            Log.e(TAG, "Failed to parse Ethereum URI from NDEF")
             return byteArrayOf(0x6A.toByte(), 0x80.toByte()) // Wrong data
         }
+    }
 
-        return byteArrayOf(0x6A.toByte(), 0x82.toByte()) // Not found
+    private fun extractChainIdFromUri(uri: String): Int? {
+        try {
+            // Look for @chainId pattern in URI
+            val atIndex = uri.indexOf('@')
+            if (atIndex == -1) return null
+
+            // Find the end of chain ID (next ? or / character)
+            var endIndex = uri.length
+            val questionIndex = uri.indexOf('?', atIndex)
+            val slashIndex = uri.indexOf('/', atIndex)
+
+            if (questionIndex != -1) endIndex = minOf(endIndex, questionIndex)
+            if (slashIndex != -1) endIndex = minOf(endIndex, slashIndex)
+
+            val chainIdStr = uri.substring(atIndex + 1, endIndex)
+            return chainIdStr.toIntOrNull()
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not extract chain ID from URI: $uri", e)
+            return null
+        }
+    }
+
+    private fun getChainName(chainId: Int): String {
+        return when (chainId) {
+            1 -> "Ethereum"
+            8453 -> "Base"
+            42161 -> "Arbitrum One"
+            10 -> "Optimism"
+            137 -> "Polygon"
+            else -> "Chain $chainId"
+        }
     }
 
     private fun handleEthereumPaymentRequest(ethereumUri: String) {
-        Log.i("HCE", "Opening wallet with URI: $ethereumUri")
+        Log.i(TAG, "Opening wallet with URI: $ethereumUri")
 
         try {
             val intent = Intent(Intent.ACTION_VIEW, Uri.parse(ethereumUri))
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             startActivity(intent)
+            Log.i(TAG, "Successfully launched wallet app")
         } catch (e: Exception) {
-            Log.e("HCE", "Failed to open wallet app", e)
-
+            Log.e(TAG, "Failed to open wallet app", e)
 
             // Fallback: Try to find wallet apps specifically
-            val pm = packageManager
-            val activities = pm.queryIntentActivities(
-                Intent(Intent.ACTION_VIEW, Uri.parse("ethereum:")),
-                PackageManager.MATCH_DEFAULT_ONLY
-            )
+            try {
+                val pm = packageManager
+                val activities = pm.queryIntentActivities(
+                    Intent(Intent.ACTION_VIEW, Uri.parse("ethereum:")),
+                    PackageManager.MATCH_DEFAULT_ONLY
+                )
 
-            if (!activities.isEmpty()) {
-                val walletIntent = Intent(Intent.ACTION_VIEW, Uri.parse(ethereumUri))
-                walletIntent.setPackage(activities[0].activityInfo.packageName)
-                walletIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                startActivity(walletIntent)
+                if (activities.isNotEmpty()) {
+                    Log.i(TAG, "Trying fallback wallet app: ${activities[0].activityInfo.packageName}")
+                    val walletIntent = Intent(Intent.ACTION_VIEW, Uri.parse(ethereumUri))
+                    walletIntent.setPackage(activities[0].activityInfo.packageName)
+                    walletIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    startActivity(walletIntent)
+                } else {
+                    Log.e(TAG, "No wallet apps found to handle ethereum: URIs")
+
+                    // Try some common wallet package names as last resort
+                    val commonWallets = listOf(
+                        "io.metamask",
+                        "me.rainbow",
+                        "org.ethereum.mist",
+                        "com.coinbase.android"
+                    )
+
+                    for (packageName in commonWallets) {
+                        try {
+                            pm.getPackageInfo(packageName, 0)
+                            Log.i(TAG, "Trying common wallet: $packageName")
+                            val walletIntent = Intent(Intent.ACTION_VIEW, Uri.parse(ethereumUri))
+                            walletIntent.setPackage(packageName)
+                            walletIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            startActivity(walletIntent)
+                            break
+                        } catch (ex: Exception) {
+                            // Wallet not installed, try next
+                        }
+                    }
+                }
+            } catch (fallbackError: Exception) {
+                Log.e(TAG, "All wallet opening attempts failed", fallbackError)
             }
         }
     }
@@ -128,6 +196,8 @@ class CardService : HostApduService() {
 
     private fun parseEthereumUriFromNDEF(ndefData: ByteArray): String? {
         try {
+            Log.d(TAG, "Parsing NDEF data: ${bytesToHex(ndefData)}")
+
             // NDEF URI Record structure we created:
             // [0] Record Header (0xD1)
             // [1] Type Length (0x01)
@@ -137,10 +207,9 @@ class CardService : HostApduService() {
             // [5...] URI data
 
             if (ndefData.size < 5) {
-                Log.e("NDEF", "NDEF data too short")
+                Log.e(TAG, "NDEF data too short: ${ndefData.size} bytes")
                 return null
             }
-
 
             // Verify it's a URI record
             val recordHeader = ndefData[0]
@@ -148,47 +217,75 @@ class CardService : HostApduService() {
             val payloadLength = ndefData[2]
             val recordType = ndefData[3]
 
+            Log.d(TAG, "NDEF record - Header: ${String.format("%02X", recordHeader)}, TypeLen: ${String.format("%02X", typeLength)}, PayloadLen: ${String.format("%02X", payloadLength)}, Type: ${String.format("%02X", recordType)}")
 
             // Check if it's a Well-Known URI record
             if ((recordHeader.toInt() and 0x07) != 0x01 ||  // TNF must be 001 (Well Known)
-                typeLength.toInt() != 0x01 ||  // Type length must be 1
-                recordType.toInt() != 0x55
-            ) {             // Type must be 'U' (0x55)
-                Log.e("NDEF", "Not a valid URI record")
+                typeLength.toInt() != 0x01 ||               // Type length must be 1
+                recordType.toInt() != 0x55) {               // Type must be 'U' (0x55)
+                Log.e(TAG, "Not a valid URI record")
                 return null
             }
-
 
             // Extract URI abbreviation and data
             val uriAbbreviation = ndefData[4]
             val uriDataLength = payloadLength - 1 // Subtract 1 for abbreviation byte
 
+            Log.d(TAG, "URI abbreviation: ${String.format("%02X", uriAbbreviation)}, data length: $uriDataLength")
+
             if (ndefData.size < 5 + uriDataLength) {
-                Log.e("NDEF", "NDEF data truncated")
+                Log.e(TAG, "NDEF data truncated")
                 return null
             }
-
 
             // Extract the URI data
             val uriBytes = Arrays.copyOfRange(ndefData, 5, 5 + uriDataLength)
             val uri = String(uriBytes, StandardCharsets.UTF_8)
 
+            Log.d(TAG, "Extracted raw URI: '$uri'")
 
             // Handle URI abbreviation codes (we use 0x00 = no abbreviation)
             val fullUri = applyUriAbbreviation(uriAbbreviation, uri)
 
+            Log.d(TAG, "Full URI after abbreviation handling: '$fullUri'")
 
-            // Verify it's an Ethereum URI
+            // Verify it's an Ethereum URI and validate the format
             if (fullUri != null && fullUri.startsWith("ethereum:")) {
-                Log.i("NDEF", "Extracted Ethereum URI: $fullUri")
-                return fullUri
+                // Additional validation for EIP-681 format
+                if (isValidEIP681Uri(fullUri)) {
+                    Log.i(TAG, "Successfully extracted valid EIP-681 URI: $fullUri")
+                    return fullUri
+                } else {
+                    Log.w(TAG, "URI format may not be fully EIP-681 compliant but proceeding: $fullUri")
+                    return fullUri  // Still try to process it
+                }
             } else {
-                Log.e("NDEF", "Not an Ethereum URI: $fullUri")
+                Log.e(TAG, "Not an Ethereum URI: '$fullUri'")
                 return null
             }
-        } catch (e: java.lang.Exception) {
-            Log.e("NDEF", "Error parsing NDEF data", e)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error parsing NDEF data", e)
             return null
+        }
+    }
+
+    private fun isValidEIP681Uri(uri: String): Boolean {
+        try {
+            // Basic EIP-681 validation
+            if (!uri.startsWith("ethereum:")) return false
+
+            // Check for common patterns
+            val hasChainId = uri.contains("@")
+            val hasTransfer = uri.contains("/transfer")
+            val hasValue = uri.contains("value=")
+            val hasAddress = uri.contains("address=")
+
+            Log.d(TAG, "URI validation - hasChainId: $hasChainId, hasTransfer: $hasTransfer, hasValue: $hasValue, hasAddress: $hasAddress")
+
+            return true  // Accept all ethereum: URIs for now
+        } catch (e: Exception) {
+            Log.w(TAG, "Error validating EIP-681 URI", e)
+            return false
         }
     }
 
@@ -230,9 +327,9 @@ class CardService : HostApduService() {
             0x20.toByte() -> return "urn:epc:pat:$uri"
             0x21.toByte() -> return "urn:epc:raw:$uri"
             0x22.toByte() -> return "urn:epc:$uri"
-            0x23.toByte() -> return "urn:nfc:$uri" // Corrected line
+            0x23.toByte() -> return "urn:nfc:$uri"
             else -> {
-                Log.w("NDEF", "Unknown URI abbreviation code: $abbreviationCode")
+                Log.w(TAG, "Unknown URI abbreviation code: ${String.format("%02X", abbreviationCode)}")
                 return uri // Treat as no abbreviation
             }
         }
@@ -247,6 +344,7 @@ class CardService : HostApduService() {
 
     override fun onDeactivated(reason: Int) {
         // Called when link is lost (card removed, reader moved away, etc.)
+        Log.d(TAG, "HCE deactivated, reason: $reason")
     }
 }
 
