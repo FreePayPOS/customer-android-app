@@ -127,7 +127,7 @@ class MainActivity : ComponentActivity() {
         }
         
         // Check if our service is the default for the AID
-        val isDefault = cardEmulation.isDefaultServiceForAid(component, "F2222222222222")
+        val isDefault = cardEmulation.isDefaultServiceForAid(component, "D2760000850101")
         Log.d(TAG, "Is default service for AID: $isDefault")
         
         // Get list of registered AIDs for our service
@@ -156,7 +156,7 @@ class MainActivity : ComponentActivity() {
                                 }
                                 // Try to connect with WalletConnect first
                                 connectToWallet(wallet)
-                                showWalletSelection = false
+                                // Don't close the wallet selection screen yet - let connectToWallet handle it
                             },
                             onManualAddressEntry = { wallet, address ->
                                 // Disconnect previous connection when entering new address
@@ -233,15 +233,18 @@ class MainActivity : ComponentActivity() {
                 if (address != null) {
                     Log.i(TAG, "Successfully retrieved address from ${wallet.appName}: $address")
                     selectWallet(wallet, address)
+                    showWalletSelection = false // Only close on successful connection
                 } else {
                     Log.w(TAG, "Address retrieval will be completed through guided manual entry")
                     nfcDataState = "Please enter your ${wallet.appName} address to complete setup"
-                    // Manual entry will be handled by the WalletSelectionScreen since walletSelection is still null
+                    // Keep wallet selection screen open for manual entry
+                    // The WalletSelectionScreen will handle the transition to manual entry
                 }
                 
             } catch (e: Exception) {
                 Log.e(TAG, "Error connecting to wallet: ${e.message}", e)
                 nfcDataState = "Connection error with ${wallet.appName} - please try again"
+                // Keep wallet selection screen open so user can try again
             }
         }
     }
@@ -261,8 +264,8 @@ class MainActivity : ComponentActivity() {
         val testService = CardService()
         testService.onCreate()
         
-        // Test the SELECT command
-        val selectCommand = byteArrayOf(0x00, 0xA4.toByte(), 0x04, 0x00, 0x07, 0xF2.toByte(), 0x22, 0x22, 0x22, 0x22, 0x22, 0x22)
+        // Test the SELECT command with new AID
+        val selectCommand = byteArrayOf(0x00, 0xA4.toByte(), 0x04, 0x00, 0x08, 0xD2.toByte(), 0x76, 0x00, 0x00, 0x85.toByte(), 0x01, 0x01)
         Log.d(TAG, "Testing SELECT command...")
         val selectResponse = testService.processCommandApdu(selectCommand, null)
         Log.d(TAG, "SELECT response: ${selectResponse.joinToString { String.format("%02X", it) }}")
@@ -436,6 +439,23 @@ fun WalletSelectionScreen(
             !connectionState.isConnecting && 
             connectionState.connectionStep!!.contains("copy your address")) {
             showManualEntry = true
+        }
+    }
+    
+    // Track wallet selection from outside connections
+    LaunchedEffect(connectionState.connectionStep) {
+        if (connectionState.connectionStep != null && 
+            !connectionState.isConnecting &&
+            selectedWallet == null) {
+            // Try to find which wallet was being connected based on connection state
+            // This helps maintain the selected wallet context during manual entry
+            connectionState.connectionStep?.let { step ->
+                wallets.forEach { wallet ->
+                    if (step.contains(wallet.appName, ignoreCase = true)) {
+                        selectedWallet = wallet
+                    }
+                }
+            }
         }
     }
     
@@ -627,7 +647,7 @@ fun WalletSelectionScreen(
                                     return@Button
                                 }
                                 
-                                // If no wallet selected, create a generic wallet entry
+                                // Use the selected wallet if available, otherwise create a manual entry
                                 val walletToSave = selectedWallet ?: WalletApp(
                                     packageName = "manual_entry",
                                     appName = "Manual Entry"
@@ -638,7 +658,7 @@ fun WalletSelectionScreen(
                             enabled = walletAddress.trim().isNotEmpty(),
                             modifier = Modifier.weight(1f)
                         ) {
-                            Text("Save Wallet")
+                            Text("Save Address")
                         }
                     }
                 }

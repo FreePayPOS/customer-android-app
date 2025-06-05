@@ -32,14 +32,14 @@ class WalletManager(private val context: Context) {
             "io.metamask" to "MetaMask",
             "me.rainbow" to "Rainbow Wallet",
             "org.ethereum.mist" to "Mist Browser",
-            "com.coinbase.wallet" to "Coinbase Wallet",
+            "com.coinbase.wallet" to "Coinbase Wallet", // Self-custodial wallet (preferred)
             "com.wallet.crypto.trustapp" to "Trust Wallet",
             "im.token.app" to "imToken",
             "co.myst.android" to "Status",
             "com.alphawallet.app" to "AlphaWallet",
             "org.walleth" to "WallETH",
             "piuk.blockchain.android" to "Blockchain Wallet",
-            "com.coinbase.android" to "Coinbase (Old)",
+            "com.coinbase.android" to "Coinbase (Exchange)", // Main exchange app (not preferred for wallet)
             "com.exodus" to "Exodus",
             "com.myetherwallet.mewwallet" to "MEW wallet"
         )
@@ -68,6 +68,12 @@ class WalletManager(private val context: Context) {
             
             // Skip duplicates
             if (availableWallets.any { it.packageName == packageName }) continue
+            
+            // Skip non-wallet apps (browsers, etc.)
+            if (shouldSkipApp(packageName)) {
+                Log.d(TAG, "Skipping non-wallet app: $appName ($packageName)")
+                continue
+            }
             
             availableWallets.add(WalletApp(packageName, appName))
             Log.d(TAG, "Found wallet app via intent query: $appName ($packageName)")
@@ -104,9 +110,10 @@ class WalletManager(private val context: Context) {
                 
                 for (activity in schemeActivities) {
                     val packageName = activity.activityInfo.packageName
+                    
                     // Skip if already found or if it's a browser/system app
                     if (availableWallets.any { it.packageName == packageName }) continue
-                    if (packageName.contains("browser") || packageName.contains("chrome")) continue
+                    if (shouldSkipApp(packageName)) continue
                     
                     val appName = activity.loadLabel(pm).toString()
                     availableWallets.add(WalletApp(packageName, "$appName (via $scheme)"))
@@ -117,12 +124,63 @@ class WalletManager(private val context: Context) {
             }
         }
         
-        Log.d(TAG, "Final wallet detection result: ${availableWallets.size} wallets found")
-        for (wallet in availableWallets) {
+        // Post-processing: Remove duplicates and apply prioritization
+        val finalWallets = prioritizeAndFilterWallets(availableWallets)
+        
+        Log.d(TAG, "Final wallet detection result: ${finalWallets.size} wallets found")
+        for (wallet in finalWallets) {
             Log.d(TAG, "  - ${wallet.appName} (${wallet.packageName})")
         }
         
-        return availableWallets.sortedBy { it.appName }
+        return finalWallets.sortedBy { it.appName }
+    }
+    
+    /**
+     * Check if an app should be skipped during wallet detection
+     */
+    private fun shouldSkipApp(packageName: String): Boolean {
+        val skipPatterns = listOf(
+            "browser", "chrome", "firefox", "edge", "opera", 
+            "samsung", "google", "android",
+            "com.coinbase.android" // Skip main Coinbase app in favor of Coinbase Wallet
+        )
+        
+        return skipPatterns.any { pattern -> 
+            packageName.contains(pattern, ignoreCase = true) 
+        }
+    }
+    
+    /**
+     * Prioritize wallet apps and remove unwanted duplicates
+     */
+    private fun prioritizeAndFilterWallets(wallets: List<WalletApp>): List<WalletApp> {
+        val filteredWallets = mutableListOf<WalletApp>()
+        
+        // Special handling for Coinbase: prioritize Coinbase Wallet over main Coinbase app
+        val coinbaseWallet = wallets.find { it.packageName == "com.coinbase.wallet" }
+        val coinbaseMain = wallets.find { it.packageName == "com.coinbase.android" }
+        
+        if (coinbaseWallet != null && coinbaseMain != null) {
+            Log.d(TAG, "Found both Coinbase apps - prioritizing Coinbase Wallet")
+            filteredWallets.add(coinbaseWallet)
+            // Skip the main Coinbase app
+        } else if (coinbaseWallet != null) {
+            filteredWallets.add(coinbaseWallet)
+        } else if (coinbaseMain != null) {
+            // Only add main Coinbase if Wallet is not available
+            filteredWallets.add(coinbaseMain.copy(appName = "Coinbase (Exchange App)"))
+        }
+        
+        // Add all other wallets except the Coinbase ones we already handled
+        filteredWallets.addAll(
+            wallets.filter { 
+                it.packageName != "com.coinbase.wallet" && 
+                it.packageName != "com.coinbase.android" 
+            }
+        )
+        
+        // Remove duplicates by package name
+        return filteredWallets.distinctBy { it.packageName }
     }
     
     /**
