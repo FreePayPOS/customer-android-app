@@ -48,7 +48,7 @@ class WalletConnectManager(private val context: Context) {
             when (walletPackageName) {
                 "io.metamask" -> connectMetaMaskWithAutoRetrieve(continuation)
                 "me.rainbow" -> connectRainbowWithAutoRetrieve(continuation)
-                "com.coinbase.wallet" -> connectCoinbaseWithAutoRetrieve(continuation)
+                "org.toshi" -> connectCoinbaseWithAutoRetrieve(continuation)
                 else -> connectGenericWalletWithAutoRetrieve(continuation, walletPackageName)
             }
             
@@ -169,7 +169,7 @@ class WalletConnectManager(private val context: Context) {
             "cbwallet://"
         )
         
-        if (openWalletWithSmartConnection("com.coinbase.wallet", "Coinbase Wallet", connectionUris)) {
+        if (openWalletWithSmartConnection("org.toshi", "Coinbase Wallet", connectionUris)) {
             scope.launch {
                 _connectionState.value = WalletConnectionState(
                     isConnecting = true,
@@ -183,7 +183,7 @@ class WalletConnectManager(private val context: Context) {
                 )
                 delay(3000)
                 
-                val autoRetrievedAddress = attemptAutoAddressRetrieval("com.coinbase.wallet", sessionId)
+                val autoRetrievedAddress = attemptAutoAddressRetrieval("org.toshi", sessionId)
                 
                 if (autoRetrievedAddress != null) {
                     Log.i(TAG, "🎉 Auto-retrieved Coinbase Wallet address: $autoRetrievedAddress")
@@ -305,7 +305,7 @@ class WalletConnectManager(private val context: Context) {
         return when (packageName) {
             "io.metamask" -> "MetaMask"
             "me.rainbow" -> "Rainbow"
-            "com.coinbase.wallet" -> "Coinbase Wallet"
+            "org.toshi" -> "Coinbase Wallet"
             "org.ethereum.mist" -> "Mist Browser"
             "com.trustwallet.app" -> "Trust Wallet"
             else -> "Wallet"

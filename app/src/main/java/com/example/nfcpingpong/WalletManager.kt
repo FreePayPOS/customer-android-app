@@ -32,7 +32,7 @@ class WalletManager(private val context: Context) {
             "io.metamask" to "MetaMask",
             "me.rainbow" to "Rainbow Wallet",
             "org.ethereum.mist" to "Mist Browser",
-            "com.coinbase.wallet" to "Coinbase Wallet", // Self-custodial wallet (preferred)
+            "org.toshi" to "Coinbase Wallet", // Self-custodial wallet (correct package name)
             "com.wallet.crypto.trustapp" to "Trust Wallet",
             "im.token.app" to "imToken",
             "co.myst.android" to "Status",
@@ -141,7 +141,7 @@ class WalletManager(private val context: Context) {
     private fun shouldSkipApp(packageName: String): Boolean {
         val skipPatterns = listOf(
             "browser", "chrome", "firefox", "edge", "opera", 
-            "samsung", "google", "android",
+            "samsung.android", "google.", ".android.browser",
             "com.coinbase.android" // Skip main Coinbase app in favor of Coinbase Wallet
         )
         
@@ -157,7 +157,7 @@ class WalletManager(private val context: Context) {
         val filteredWallets = mutableListOf<WalletApp>()
         
         // Special handling for Coinbase: prioritize Coinbase Wallet over main Coinbase app
-        val coinbaseWallet = wallets.find { it.packageName == "com.coinbase.wallet" }
+        val coinbaseWallet = wallets.find { it.packageName == "org.toshi" }
         val coinbaseMain = wallets.find { it.packageName == "com.coinbase.android" }
         
         if (coinbaseWallet != null && coinbaseMain != null) {
@@ -174,7 +174,7 @@ class WalletManager(private val context: Context) {
         // Add all other wallets except the Coinbase ones we already handled
         filteredWallets.addAll(
             wallets.filter { 
-                it.packageName != "com.coinbase.wallet" && 
+                it.packageName != "org.toshi" && 
                 it.packageName != "com.coinbase.android" 
             }
         )

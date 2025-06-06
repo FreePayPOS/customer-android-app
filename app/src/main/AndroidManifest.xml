@@ -33,10 +33,15 @@
             <data android:scheme="web3" />
         </intent>
         
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="cbwallet" />
+        </intent>
+        
         <!-- Specific wallet packages -->
         <package android:name="io.metamask" />
         <package android:name="me.rainbow" />
-        <package android:name="com.coinbase.wallet" />
+        <package android:name="org.toshi" />
         <package android:name="com.coinbase.android" />
         <package android:name="com.wallet.crypto.trustapp" />
         <package android:name="im.token.app" />
