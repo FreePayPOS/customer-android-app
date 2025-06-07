@@ -1,4 +1,4 @@
-package com.example.nfcpingpong.ui.theme
+package com.freepaypos.ui.theme
 
 import androidx.compose.ui.graphics.Color
 

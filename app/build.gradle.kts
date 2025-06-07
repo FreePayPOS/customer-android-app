@@ -5,11 +5,11 @@ plugins {
 }
 
 android {
-    namespace = "com.example.nfcpingpong"
+    namespace = "com.freepaypos"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.example.nfcpingpong"
+        applicationId = "com.freepaypos"
         minSdk = 24
         targetSdk = 35
         versionCode = 1

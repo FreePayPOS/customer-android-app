@@ -1,4 +1,4 @@
-package com.example.nfcpingpong
+package com.freepaypos
 
 import android.content.BroadcastReceiver
 import android.os.Bundle
@@ -12,7 +12,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
-import com.example.nfcpingpong.ui.theme.NFCPingPongTheme
+import com.freepaypos.ui.theme.FreePayPOSTheme
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -141,7 +141,7 @@ class MainActivity : ComponentActivity() {
 
         enableEdgeToEdge()
         setContent {
-            NFCPingPongTheme {
+            FreePayPOSTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     // Show wallet selection screen if no wallet is selected OR user wants to change wallet
                     if (walletSelection == null || showWalletSelection) {
@@ -194,7 +194,7 @@ class MainActivity : ComponentActivity() {
         
         LocalBroadcastManager.getInstance(this).registerReceiver(
             nfcDataReceiver,
-            IntentFilter("com.example.nfcpingpong.NFC_DATA_RECEIVED")
+            IntentFilter("com.freepaypos.NFC_DATA_RECEIVED")
         )
     }
     
@@ -288,7 +288,7 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
-        private const val TAG = "PINGPONG_HCE"
+        private const val TAG = "FREEPAY_HCE"
     }
 }
 
@@ -846,7 +846,7 @@ fun WalletSelectionScreen(
 @Preview(showBackground = true)
 @Composable
 fun MainContentPreview() {
-    NFCPingPongTheme {
+    FreePayPOSTheme {
         MainContent(
             nfcData = "Waiting for NFC data...",
             walletSelection = WalletSelection(

@@ -1,4 +1,4 @@
-package com.example.nfcpingpong      // adjust if you changed the package
+package com.freepaypos
 
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -424,7 +424,7 @@ class CardService : HostApduService() {
     }
 
     private fun sendDataToActivity(message: String) {
-        val intent = Intent("com.example.nfcpingpong.NFC_DATA_RECEIVED")
+        val intent = Intent("com.freepaypos.NFC_DATA_RECEIVED")
         intent.putExtra("nfc_data", message)
         LocalBroadcastManager.getInstance(this).sendBroadcast(intent)
         Log.d(TAG, "Sent broadcast with message: $message")

@@ -1,4 +1,4 @@
-package com.example.nfcpingpong
+package com.freepaypos
 
 import android.content.Context
 import android.content.Intent

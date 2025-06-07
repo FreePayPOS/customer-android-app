@@ -62,14 +62,14 @@
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:theme="@style/Theme.NFCPingPong"
+        android:theme="@style/Theme.FreePayPOS"
         tools:targetApi="31"
         tools:replace="android:dataExtractionRules">
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:label="@string/app_name"
-            android:theme="@style/Theme.NFCPingPong">
+            android:theme="@style/Theme.FreePayPOS">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 

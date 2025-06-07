@@ -21,5 +21,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "NFCPingPong"
+rootProject.name = "FreePayPOS"
 include(":app")

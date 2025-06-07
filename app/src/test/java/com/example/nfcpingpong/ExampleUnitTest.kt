@@ -1,4 +1,4 @@
-package com.example.nfcpingpong
+package com.freepaypos
 
 import org.junit.Test
 
