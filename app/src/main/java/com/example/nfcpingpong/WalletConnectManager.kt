@@ -49,6 +49,12 @@ class WalletConnectManager(private val context: Context) {
                 "io.metamask" -> connectMetaMaskWithAutoRetrieve(continuation)
                 "me.rainbow" -> connectRainbowWithAutoRetrieve(continuation)
                 "org.toshi" -> connectCoinbaseWithAutoRetrieve(continuation)
+                "com.debank.rabbymobile" -> connectRabbyWithAutoRetrieve(continuation)
+                "app.phantom" -> connectPhantomWithAutoRetrieve(continuation)
+                "com.daimo" -> connectDaimoWithAutoRetrieve(continuation)
+                "com.railway.rtp" -> connectRailwayWithAutoRetrieve(continuation)
+                "com.polybaselabs.wallet" -> connectPayyWithAutoRetrieve(continuation)
+                "money.stables" -> connectStablesWithAutoRetrieve(continuation)
                 else -> connectGenericWalletWithAutoRetrieve(continuation, walletPackageName)
             }
             
@@ -205,6 +211,295 @@ class WalletConnectManager(private val context: Context) {
         }
     }
     
+    private fun connectRabbyWithAutoRetrieve(continuation: kotlin.coroutines.Continuation<String?>) {
+        Log.d(TAG, "🐰 Connecting to Rabby Wallet with auto-retrieval...")
+        
+        val sessionId = UUID.randomUUID().toString()
+        
+        val connectionUris = listOf(
+            "rabby://dapp/$DAPP_URL?method=eth_requestAccounts&sessionId=$sessionId",
+            "https://rabby.io/dapp/$DAPP_URL?method=eth_requestAccounts",
+            "rabby://connect?name=${Uri.encode(DAPP_NAME)}&url=$DAPP_URL&sessionId=$sessionId",
+            "ethereum://connect?name=${Uri.encode(DAPP_NAME)}&url=$DAPP_URL&sessionId=$sessionId",
+            "rabby://"
+        )
+        
+        if (openWalletWithSmartConnection("com.debank.rabbymobile", "Rabby Wallet", connectionUris)) {
+            scope.launch {
+                _connectionState.value = WalletConnectionState(
+                    isConnecting = true,
+                    connectionStep = "Rabby Wallet opened - requesting account access..."
+                )
+                delay(2000)
+                
+                _connectionState.value = WalletConnectionState(
+                    isConnecting = true,
+                    connectionStep = "Please approve the connection request in Rabby Wallet"
+                )
+                delay(3000)
+                
+                val autoRetrievedAddress = attemptAutoAddressRetrieval("com.debank.rabbymobile", sessionId)
+                
+                if (autoRetrievedAddress != null) {
+                    Log.i(TAG, "🎉 Auto-retrieved Rabby Wallet address: $autoRetrievedAddress")
+                    _connectionState.value = WalletConnectionState(
+                        isConnected = true,
+                        address = autoRetrievedAddress,
+                        connectionStep = "Successfully connected to Rabby Wallet!"
+                    )
+                    continuation.resume(autoRetrievedAddress)
+                } else {
+                    _connectionState.value = WalletConnectionState(
+                        connectionStep = "Connected to Rabby Wallet! Please copy your address and paste it below"
+                    )
+                    continuation.resume(null)
+                }
+            }
+        } else {
+            continuation.resume(null)
+        }
+    }
+    
+    private fun connectPhantomWithAutoRetrieve(continuation: kotlin.coroutines.Continuation<String?>) {
+        Log.d(TAG, "👻 Connecting to Phantom Wallet with auto-retrieval...")
+        
+        val sessionId = UUID.randomUUID().toString()
+        
+        val connectionUris = listOf(
+            "phantom://dapp/$DAPP_URL?method=eth_requestAccounts&sessionId=$sessionId",
+            "https://phantom.app/ul/dapp/$DAPP_URL?method=eth_requestAccounts",
+            "phantom://connect?name=${Uri.encode(DAPP_NAME)}&url=$DAPP_URL&sessionId=$sessionId",
+            "phantom://"
+        )
+        
+        if (openWalletWithSmartConnection("app.phantom", "Phantom Wallet", connectionUris)) {
+            scope.launch {
+                _connectionState.value = WalletConnectionState(
+                    isConnecting = true,
+                    connectionStep = "Phantom Wallet opened - requesting account access..."
+                )
+                delay(2000)
+                
+                _connectionState.value = WalletConnectionState(
+                    isConnecting = true,
+                    connectionStep = "Please approve the connection request in Phantom Wallet"
+                )
+                delay(3000)
+                
+                val autoRetrievedAddress = attemptAutoAddressRetrieval("app.phantom", sessionId)
+                
+                if (autoRetrievedAddress != null) {
+                    Log.i(TAG, "🎉 Auto-retrieved Phantom Wallet address: $autoRetrievedAddress")
+                    _connectionState.value = WalletConnectionState(
+                        isConnected = true,
+                        address = autoRetrievedAddress,
+                        connectionStep = "Successfully connected to Phantom Wallet!"
+                    )
+                    continuation.resume(autoRetrievedAddress)
+                } else {
+                    _connectionState.value = WalletConnectionState(
+                        connectionStep = "Connected to Phantom Wallet! Please copy your address and paste it below"
+                    )
+                    continuation.resume(null)
+                }
+            }
+        } else {
+            continuation.resume(null)
+        }
+    }
+    
+    private fun connectDaimoWithAutoRetrieve(continuation: kotlin.coroutines.Continuation<String?>) {
+        Log.d(TAG, "💰 Connecting to Daimo with auto-retrieval...")
+        
+        val sessionId = UUID.randomUUID().toString()
+        
+        val connectionUris = listOf(
+            "daimo://dapp/$DAPP_URL?method=eth_requestAccounts&sessionId=$sessionId",
+            "https://daimo.com/link/dapp/$DAPP_URL?method=eth_requestAccounts",
+            "daimo://connect?name=${Uri.encode(DAPP_NAME)}&url=$DAPP_URL&sessionId=$sessionId",
+            "daimo://"
+        )
+        
+        if (openWalletWithSmartConnection("com.daimo", "Daimo", connectionUris)) {
+            scope.launch {
+                _connectionState.value = WalletConnectionState(
+                    isConnecting = true,
+                    connectionStep = "Daimo opened - requesting account access..."
+                )
+                delay(2000)
+                
+                _connectionState.value = WalletConnectionState(
+                    isConnecting = true,
+                    connectionStep = "Please approve the connection request in Daimo"
+                )
+                delay(3000)
+                
+                val autoRetrievedAddress = attemptAutoAddressRetrieval("com.daimo", sessionId)
+                
+                if (autoRetrievedAddress != null) {
+                    Log.i(TAG, "🎉 Auto-retrieved Daimo address: $autoRetrievedAddress")
+                    _connectionState.value = WalletConnectionState(
+                        isConnected = true,
+                        address = autoRetrievedAddress,
+                        connectionStep = "Successfully connected to Daimo!"
+                    )
+                    continuation.resume(autoRetrievedAddress)
+                } else {
+                    _connectionState.value = WalletConnectionState(
+                        connectionStep = "Connected to Daimo! Please copy your address and paste it below"
+                    )
+                    continuation.resume(null)
+                }
+            }
+        } else {
+            continuation.resume(null)
+        }
+    }
+    
+    private fun connectRailwayWithAutoRetrieve(continuation: kotlin.coroutines.Continuation<String?>) {
+        Log.d(TAG, "🚄 Connecting to Railway Wallet with auto-retrieval...")
+        
+        val sessionId = UUID.randomUUID().toString()
+        
+        val connectionUris = listOf(
+            "railway://dapp/$DAPP_URL?method=eth_requestAccounts&sessionId=$sessionId",
+            "https://railway.xyz/dapp/$DAPP_URL?method=eth_requestAccounts",
+            "railway://connect?name=${Uri.encode(DAPP_NAME)}&url=$DAPP_URL&sessionId=$sessionId",
+            "railway://"
+        )
+        
+        if (openWalletWithSmartConnection("com.railway.rtp", "Railway Wallet", connectionUris)) {
+            scope.launch {
+                _connectionState.value = WalletConnectionState(
+                    isConnecting = true,
+                    connectionStep = "Railway Wallet opened - requesting account access..."
+                )
+                delay(2000)
+                
+                _connectionState.value = WalletConnectionState(
+                    isConnecting = true,
+                    connectionStep = "Please approve the connection request in Railway Wallet"
+                )
+                delay(3000)
+                
+                val autoRetrievedAddress = attemptAutoAddressRetrieval("com.railway.rtp", sessionId)
+                
+                if (autoRetrievedAddress != null) {
+                    Log.i(TAG, "🎉 Auto-retrieved Railway Wallet address: $autoRetrievedAddress")
+                    _connectionState.value = WalletConnectionState(
+                        isConnected = true,
+                        address = autoRetrievedAddress,
+                        connectionStep = "Successfully connected to Railway Wallet!"
+                    )
+                    continuation.resume(autoRetrievedAddress)
+                } else {
+                    _connectionState.value = WalletConnectionState(
+                        connectionStep = "Connected to Railway Wallet! Please copy your address and paste it below"
+                    )
+                    continuation.resume(null)
+                }
+            }
+        } else {
+            continuation.resume(null)
+        }
+    }
+    
+    private fun connectPayyWithAutoRetrieve(continuation: kotlin.coroutines.Continuation<String?>) {
+        Log.d(TAG, "💳 Connecting to Payy Wallet with auto-retrieval...")
+        
+        val sessionId = UUID.randomUUID().toString()
+        
+        val connectionUris = listOf(
+            "payy://dapp/$DAPP_URL?method=eth_requestAccounts&sessionId=$sessionId",
+            "https://payy.link/dapp/$DAPP_URL?method=eth_requestAccounts",
+            "payy://connect?name=${Uri.encode(DAPP_NAME)}&url=$DAPP_URL&sessionId=$sessionId",
+            "payy://"
+        )
+        
+        if (openWalletWithSmartConnection("com.polybaselabs.wallet", "Payy Wallet", connectionUris)) {
+            scope.launch {
+                _connectionState.value = WalletConnectionState(
+                    isConnecting = true,
+                    connectionStep = "Payy Wallet opened - requesting account access..."
+                )
+                delay(2000)
+                
+                _connectionState.value = WalletConnectionState(
+                    isConnecting = true,
+                    connectionStep = "Please approve the connection request in Payy Wallet"
+                )
+                delay(3000)
+                
+                val autoRetrievedAddress = attemptAutoAddressRetrieval("com.polybaselabs.wallet", sessionId)
+                
+                if (autoRetrievedAddress != null) {
+                    Log.i(TAG, "🎉 Auto-retrieved Payy Wallet address: $autoRetrievedAddress")
+                    _connectionState.value = WalletConnectionState(
+                        isConnected = true,
+                        address = autoRetrievedAddress,
+                        connectionStep = "Successfully connected to Payy Wallet!"
+                    )
+                    continuation.resume(autoRetrievedAddress)
+                } else {
+                    _connectionState.value = WalletConnectionState(
+                        connectionStep = "Connected to Payy Wallet! Please copy your address and paste it below"
+                    )
+                    continuation.resume(null)
+                }
+            }
+        } else {
+            continuation.resume(null)
+        }
+    }
+    
+    private fun connectStablesWithAutoRetrieve(continuation: kotlin.coroutines.Continuation<String?>) {
+        Log.d(TAG, "🏛️ Connecting to Stables with auto-retrieval...")
+        
+        val sessionId = UUID.randomUUID().toString()
+        
+        val connectionUris = listOf(
+            "stables://dapp/$DAPP_URL?method=eth_requestAccounts&sessionId=$sessionId",
+            "https://stables.money/dapp/$DAPP_URL?method=eth_requestAccounts",
+            "stables://connect?name=${Uri.encode(DAPP_NAME)}&url=$DAPP_URL&sessionId=$sessionId",
+            "stables://"
+        )
+        
+        if (openWalletWithSmartConnection("money.stables", "Stables", connectionUris)) {
+            scope.launch {
+                _connectionState.value = WalletConnectionState(
+                    isConnecting = true,
+                    connectionStep = "Stables opened - requesting account access..."
+                )
+                delay(2000)
+                
+                _connectionState.value = WalletConnectionState(
+                    isConnecting = true,
+                    connectionStep = "Please approve the connection request in Stables"
+                )
+                delay(3000)
+                
+                val autoRetrievedAddress = attemptAutoAddressRetrieval("money.stables", sessionId)
+                
+                if (autoRetrievedAddress != null) {
+                    Log.i(TAG, "🎉 Auto-retrieved Stables address: $autoRetrievedAddress")
+                    _connectionState.value = WalletConnectionState(
+                        isConnected = true,
+                        address = autoRetrievedAddress,
+                        connectionStep = "Successfully connected to Stables!"
+                    )
+                    continuation.resume(autoRetrievedAddress)
+                } else {
+                    _connectionState.value = WalletConnectionState(
+                        connectionStep = "Connected to Stables! Please copy your address and paste it below"
+                    )
+                    continuation.resume(null)
+                }
+            }
+        } else {
+            continuation.resume(null)
+        }
+    }
+
     private fun connectGenericWalletWithAutoRetrieve(continuation: kotlin.coroutines.Continuation<String?>, walletPackageName: String) {
         Log.d(TAG, "🔗 Connecting to $walletPackageName with auto-retrieval...")
         
@@ -308,6 +603,12 @@ class WalletConnectManager(private val context: Context) {
             "org.toshi" -> "Coinbase Wallet"
             "org.ethereum.mist" -> "Mist Browser"
             "com.trustwallet.app" -> "Trust Wallet"
+            "com.debank.rabbymobile" -> "Rabby Wallet"
+            "app.phantom" -> "Phantom Wallet"
+            "com.daimo" -> "Daimo"
+            "com.railway.rtp" -> "Railway Wallet"
+            "com.polybaselabs.wallet" -> "Payy Wallet"
+            "money.stables" -> "Stables"
             else -> "Wallet"
         }
     }

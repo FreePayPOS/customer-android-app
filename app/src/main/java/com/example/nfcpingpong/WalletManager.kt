@@ -41,7 +41,13 @@ class WalletManager(private val context: Context) {
             "piuk.blockchain.android" to "Blockchain Wallet",
             "com.coinbase.android" to "Coinbase (Exchange)", // Main exchange app (not preferred for wallet)
             "com.exodus" to "Exodus",
-            "com.myetherwallet.mewwallet" to "MEW wallet"
+            "com.myetherwallet.mewwallet" to "MEW wallet",
+            "com.debank.rabbymobile" to "Rabby Wallet",
+            "app.phantom" to "Phantom Wallet",
+            "com.daimo" to "Daimo",
+            "com.railway.rtp" to "Railway Wallet",
+            "com.polybaselabs.wallet" to "Payy Wallet",
+            "money.stables" to "Stables"
         )
     }
     
