@@ -2,11 +2,17 @@ package com.freepaypos
 
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.content.BroadcastReceiver
+import android.content.ContentResolver
+import android.database.Cursor
 import android.net.Uri
+import android.os.Bundle
 import android.util.Log
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.selects.select
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
 import java.util.UUID
@@ -27,9 +33,38 @@ class WalletConnectManager(private val context: Context) {
     
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     
+    // Map to track pending address requests
+    private val pendingRequests = mutableMapOf<String, kotlin.coroutines.Continuation<String?>>()
+    
+    // Broadcast receiver for wallet responses
+    private val walletResponseReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            handleWalletResponse(intent)
+        }
+    }
+    
     companion object {
         private const val DAPP_NAME = "NFC Wallet Handshake"
         private const val DAPP_URL = "nfcwallethandshake.com"
+        
+        // Broadcast actions for wallet responses
+        private const val ACTION_WALLET_ADDRESS_RESPONSE = "com.freepaypos.WALLET_ADDRESS_RESPONSE"
+        private const val EXTRA_WALLET_ADDRESS = "wallet_address"
+        private const val EXTRA_SESSION_ID = "session_id"
+        private const val EXTRA_SUCCESS = "success"
+    }
+    
+    init {
+        // Register broadcast receiver for wallet responses
+        val filter = IntentFilter().apply {
+            addAction(ACTION_WALLET_ADDRESS_RESPONSE)
+        }
+        try {
+            context.registerReceiver(walletResponseReceiver, filter)
+            Log.d(TAG, "✅ Registered wallet response broadcast receiver")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to register broadcast receiver: ${e.message}")
+        }
     }
     
     /**
@@ -83,13 +118,13 @@ class WalletConnectManager(private val context: Context) {
             scope.launch {
                 _connectionState.value = WalletConnectionState(
                     isConnecting = true,
-                    connectionStep = "MetaMask opened - requesting account access..."
+                    connectionStep = "Opening MetaMask to your portfolio view..."
                 )
                 delay(2000)
                 
                 _connectionState.value = WalletConnectionState(
                     isConnecting = true,
-                    connectionStep = "Please approve the connection request in MetaMask"
+                    connectionStep = "💡 In MetaMask: tap your account name/address and copy it. Then switch back to this app!"
                 )
                 delay(3000)
                 
@@ -543,14 +578,840 @@ class WalletConnectManager(private val context: Context) {
     }
     
     private suspend fun attemptAutoAddressRetrieval(walletPackageName: String, sessionId: String): String? {
-        Log.d(TAG, "🔍 Attempting automatic address retrieval for $walletPackageName")
+        Log.d(TAG, "🔍 Starting guided address retrieval for $walletPackageName with session: $sessionId")
         
-        delay(1000) // Simulate API call delay
+        return try {
+            // Use a guided approach that works within Android's security model
+            when (walletPackageName) {
+                "io.metamask" -> guideMetaMaskAddressRetrieval(sessionId)
+                "org.toshi" -> guideCoinbaseAddressRetrieval(sessionId)
+                "me.rainbow" -> guideRainbowAddressRetrieval(sessionId)
+                else -> guideGenericWalletAddressRetrieval(walletPackageName, sessionId)
+            }
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Guided address retrieval failed: ${e.message}")
+            null
+        }
+    }
+    
+    /**
+     * Guide user through MetaMask address copying - opens to portfolio/account view
+     */
+    private suspend fun guideMetaMaskAddressRetrieval(sessionId: String): String? = withContext(Dispatchers.IO) {
+        Log.d(TAG, "🦊 Starting guided MetaMask address retrieval")
         
-        // Future enhancement: implement actual automatic retrieval here
-        // using wallet-specific SDKs or deep link callbacks
+        try {
+            // Open MetaMask to main app (portfolio view) instead of transaction
+            // This avoids the "Ethereum is needed" error when user has no ETH
+            val intent = Intent().apply {
+                action = Intent.ACTION_MAIN
+                setPackage("io.metamask")
+                addCategory(Intent.CATEGORY_LAUNCHER)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            }
+            
+            context.startActivity(intent)
+            Log.d(TAG, "🦊 Opened MetaMask to main portfolio view")
+            
+            // Wait for user to interact and potentially copy address
+            delay(3000)
+            
+            // Try to get address when app comes back to foreground
+            return@withContext waitForAddressOnResume(sessionId, 30000) // 30 second window
+            
+        } catch (e: Exception) {
+            Log.d(TAG, "MetaMask guidance failed: ${e.message}")
+            return@withContext null
+        }
+    }
+    
+    /**
+     * Guide user through Coinbase address copying
+     */
+    private suspend fun guideCoinbaseAddressRetrieval(sessionId: String): String? = withContext(Dispatchers.IO) {
+        Log.d(TAG, "🔵 Starting guided Coinbase address retrieval")
         
-        return null // Will trigger guided manual entry
+        try {
+            val intent = Intent().apply {
+                action = Intent.ACTION_MAIN
+                setPackage("org.toshi")
+                addCategory(Intent.CATEGORY_LAUNCHER)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            }
+            
+            context.startActivity(intent)
+            Log.d(TAG, "🔵 Opened Coinbase Wallet")
+            
+            delay(3000)
+            return@withContext waitForAddressOnResume(sessionId, 25000)
+            
+        } catch (e: Exception) {
+            Log.d(TAG, "Coinbase guidance failed: ${e.message}")
+            return@withContext null
+        }
+    }
+    
+    /**
+     * Guide user through Rainbow address copying
+     */
+    private suspend fun guideRainbowAddressRetrieval(sessionId: String): String? = withContext(Dispatchers.IO) {
+        Log.d(TAG, "🌈 Starting guided Rainbow address retrieval")
+        
+        try {
+            val intent = Intent().apply {
+                action = Intent.ACTION_MAIN
+                setPackage("me.rainbow")
+                addCategory(Intent.CATEGORY_LAUNCHER)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            }
+            
+            context.startActivity(intent)
+            Log.d(TAG, "🌈 Opened Rainbow Wallet")
+            
+            delay(3000)
+            return@withContext waitForAddressOnResume(sessionId, 25000)
+            
+        } catch (e: Exception) {
+            Log.d(TAG, "Rainbow guidance failed: ${e.message}")
+            return@withContext null
+        }
+    }
+    
+    /**
+     * Guide user through generic wallet address copying
+     */
+    private suspend fun guideGenericWalletAddressRetrieval(walletPackageName: String, sessionId: String): String? = withContext(Dispatchers.IO) {
+        Log.d(TAG, "🔗 Starting guided address retrieval for $walletPackageName")
+        
+        try {
+            val packageManager = context.packageManager
+            val launchIntent = packageManager.getLaunchIntentForPackage(walletPackageName)
+            if (launchIntent != null) {
+                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                context.startActivity(launchIntent)
+                Log.d(TAG, "🔗 Opened $walletPackageName")
+                
+                delay(3000)
+                return@withContext waitForAddressOnResume(sessionId, 20000)
+            }
+            
+        } catch (e: Exception) {
+            Log.d(TAG, "Generic wallet guidance failed: ${e.message}")
+        }
+        
+        return@withContext null
+    }
+    
+    /**
+     * Wait for app to resume and check clipboard when user returns
+     */
+    private suspend fun waitForAddressOnResume(sessionId: String, timeoutMs: Long): String? = withContext(Dispatchers.IO) {
+        Log.d(TAG, "⏳ Waiting for user to return with address (${timeoutMs}ms timeout)")
+        
+        val startTime = System.currentTimeMillis()
+        
+        // Set up a periodic check that will work when app comes back to foreground
+        while (System.currentTimeMillis() - startTime < timeoutMs) {
+            try {
+                // This check will only succeed when our app regains focus
+                val clipboardManager = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                val clipData = clipboardManager.primaryClip
+                
+                if (clipData != null && clipData.itemCount > 0) {
+                    val clipText = clipData.getItemAt(0).text?.toString()
+                    
+                    if (clipText != null) {
+                        // Check if it's a valid Ethereum address
+                        if (isValidEthereumAddress(clipText.trim())) {
+                            Log.i(TAG, "✅ Found valid Ethereum address: ${clipText.trim().take(6)}...${clipText.trim().takeLast(4)}")
+                            return@withContext clipText.trim()
+                        }
+                        
+                        // Check if clipboard contains text with an address pattern
+                        val addressPattern = Regex("0x[a-fA-F0-9]{40}")
+                        val match = addressPattern.find(clipText)
+                        if (match != null && isValidEthereumAddress(match.value)) {
+                            Log.i(TAG, "✅ Found valid Ethereum address pattern: ${match.value.take(6)}...${match.value.takeLast(4)}")
+                            return@withContext match.value
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                // Expected when app is in background - clipboard access denied
+                Log.d(TAG, "Clipboard check (expected when backgrounded): ${e.message}")
+            }
+            
+            delay(2000) // Check every 2 seconds instead of aggressive polling
+        }
+        
+        Log.d(TAG, "⏰ Address waiting timeout after ${timeoutMs}ms")
+        return@withContext null
+    }
+    
+    /**
+     * Strategy 1: Try wallet-specific enhanced methods
+     */
+    private suspend fun tryWalletSpecificMethods(walletPackageName: String, sessionId: String): String? {
+        Log.d(TAG, "🎯 Trying wallet-specific methods for $walletPackageName")
+        
+        return when (walletPackageName) {
+            "io.metamask" -> tryMetaMaskSpecificMethods(sessionId)
+            "org.toshi" -> tryCoinbaseSpecificMethods(sessionId)
+            "me.rainbow" -> tryRainbowSpecificMethods(sessionId)
+            "com.debank.rabbymobile" -> tryRabbySpecificMethods(sessionId)
+            "app.phantom" -> tryPhantomSpecificMethods(sessionId)
+            else -> null
+        }
+    }
+    
+    /**
+     * MetaMask-specific address extraction methods
+     */
+    private suspend fun tryMetaMaskSpecificMethods(sessionId: String): String? = withContext(Dispatchers.IO) {
+        Log.d(TAG, "🦊 Trying MetaMask-specific address extraction")
+        
+        // Method 1: Open MetaMask with a transaction-like request that will show the address
+        val transactionRequestUris = listOf(
+            // Use a minimal ETH send to 0x0 address - MetaMask will show "From: [user_address]"
+            "https://metamask.app.link/send/0x0000000000000000000000000000000000000000@1?value=0",
+            "metamask://send/0x0000000000000000000000000000000000000000@1?value=0",
+            // Alternative: use a dapp URL that MetaMask will open and show connected address
+            "https://metamask.app.link/dapp/$DAPP_URL",
+            "metamask://dapp/$DAPP_URL",
+            // Wallet connection flow
+            "metamask://wc?uri=wc:bridge-$sessionId",
+            "https://metamask.app.link/wc?uri=wc:bridge-$sessionId"
+        )
+        
+        for (uri in transactionRequestUris) {
+            try {
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(uri)).apply {
+                    setPackage("io.metamask")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                
+                Log.d(TAG, "🦊 Opening MetaMask with: ${uri.take(50)}...")
+                context.startActivity(intent)
+                
+                // MetaMask is now open - monitor for address in clipboard or return values
+                val foundAddress = monitorMetaMaskForAddress(sessionId)
+                if (foundAddress != null) {
+                    return@withContext foundAddress
+                }
+                
+                delay(2000) // Wait before trying next approach
+                
+            } catch (e: Exception) {
+                Log.d(TAG, "MetaMask URI failed: ${uri.take(50)} - ${e.message}")
+            }
+        }
+        
+        // Method 2: Try to extract from system logs (if accessible)
+        val addressFromLogs = extractAddressFromSystemLogs()
+        if (addressFromLogs != null) {
+            Log.i(TAG, "🦊 Found MetaMask address from system monitoring: ${addressFromLogs.take(6)}...${addressFromLogs.takeLast(4)}")
+            return@withContext addressFromLogs
+        }
+        
+        // Method 3: Try accessibility service approach (if available)
+        val addressFromAccessibility = tryAccessibilityAddressExtraction()
+        if (addressFromAccessibility != null) {
+            Log.i(TAG, "🦊 Found MetaMask address via accessibility: ${addressFromAccessibility.take(6)}...${addressFromAccessibility.takeLast(4)}")
+            return@withContext addressFromAccessibility
+        }
+        
+        null
+    }
+    
+    /**
+     * Monitor MetaMask app for address display
+     */
+    private suspend fun monitorMetaMaskForAddress(sessionId: String): String? = withContext(Dispatchers.IO) {
+        Log.d(TAG, "🦊 Monitoring MetaMask for address display...")
+        
+        // Method 1: Check clipboard for copied address
+        repeat(10) { // Check for 10 seconds
+            try {
+                val clipboardManager = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                val clipData = clipboardManager.primaryClip
+                if (clipData != null && clipData.itemCount > 0) {
+                    val clipText = clipData.getItemAt(0).text?.toString()
+                    if (clipText != null && isValidEthereumAddress(clipText)) {
+                        Log.i(TAG, "🦊 Found valid address in clipboard: ${clipText.take(6)}...${clipText.takeLast(4)}")
+                        return@withContext clipText
+                    }
+                }
+            } catch (e: Exception) {
+                Log.d(TAG, "Clipboard check failed: ${e.message}")
+            }
+            
+            delay(1000) // Check every second
+        }
+        
+        null
+    }
+    
+    /**
+     * Try to extract address from system logs (limited access)
+     */
+    private suspend fun extractAddressFromSystemLogs(): String? = withContext(Dispatchers.IO) {
+        try {
+            // This will only work with developer-enabled logging or root access
+            val process = Runtime.getRuntime().exec(arrayOf("logcat", "-d", "-s", "MetaMask:D", "MetaMask:I"))
+            val reader = process.inputStream.bufferedReader()
+            
+            val addressPattern = Regex("0x[a-fA-F0-9]{40}")
+            reader.useLines { lines ->
+                lines.forEach { line ->
+                    val match = addressPattern.find(line)
+                    if (match != null) {
+                        val address = match.value
+                        if (isValidEthereumAddress(address)) {
+                            Log.d(TAG, "🦊 Found address in logs: ${address.take(6)}...${address.takeLast(4)}")
+                            return@withContext address
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.d(TAG, "Log extraction failed (expected on non-debug builds): ${e.message}")
+        }
+        
+        null
+    }
+    
+    /**
+     * Try accessibility service approach for address extraction
+     */
+    private suspend fun tryAccessibilityAddressExtraction(): String? = withContext(Dispatchers.IO) {
+        try {
+            // Check if we can access window content (requires accessibility permissions)
+            val accessibilityManager = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as android.view.accessibility.AccessibilityManager
+            if (!accessibilityManager.isEnabled) {
+                Log.d(TAG, "🦊 Accessibility service not enabled - cannot extract from UI")
+                return@withContext null
+            }
+            
+            // This would require implementing an AccessibilityService, which is complex
+            // For now, just return null and rely on other methods
+            Log.d(TAG, "🦊 Accessibility extraction not implemented yet")
+            return@withContext null
+            
+        } catch (e: Exception) {
+            Log.d(TAG, "Accessibility approach failed: ${e.message}")
+            return@withContext null
+        }
+    }
+    
+    /**
+     * Coinbase Wallet-specific address extraction methods
+     */
+    private suspend fun tryCoinbaseSpecificMethods(sessionId: String): String? = withContext(Dispatchers.IO) {
+        Log.d(TAG, "🔵 Trying Coinbase-specific address extraction")
+        
+        // Try Coinbase-specific content providers
+        val coinbaseUris = listOf(
+            "content://org.toshi.provider/wallet",
+            "content://org.toshi.provider/accounts", 
+            "content://org.toshi.provider/selectedAccount",
+            "content://org.toshi/wallet_address"
+        )
+        
+        for (uriString in coinbaseUris) {
+            try {
+                val uri = Uri.parse(uriString)
+                val cursor = context.contentResolver.query(uri, null, null, null, null)
+                cursor?.use { c ->
+                    if (c.moveToFirst()) {
+                        for (i in 0 until c.columnCount) {
+                            try {
+                                val value = c.getString(i)
+                                if (isValidEthereumAddress(value)) {
+                                    Log.i(TAG, "🔵 Found Coinbase address: ${value.take(6)}...${value.takeLast(4)}")
+                                    return@withContext value
+                                }
+                            } catch (e: Exception) {
+                                // Continue checking other columns
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.d(TAG, "Coinbase URI failed: $uriString - ${e.message}")
+            }
+        }
+        
+        null
+    }
+    
+    /**
+     * Rainbow-specific address extraction methods
+     */
+    private suspend fun tryRainbowSpecificMethods(sessionId: String): String? = withContext(Dispatchers.IO) {
+        Log.d(TAG, "🌈 Trying Rainbow-specific address extraction")
+        
+        // Rainbow may store data in different locations
+        val rainbowUris = listOf(
+            "content://me.rainbow.provider/accounts",
+            "content://me.rainbow.provider/wallet",
+            "content://me.rainbow/selectedWallet"
+        )
+        
+        for (uriString in rainbowUris) {
+            try {
+                val uri = Uri.parse(uriString)
+                val cursor = context.contentResolver.query(uri, null, null, null, null)
+                cursor?.use { c ->
+                    if (c.moveToFirst()) {
+                        for (i in 0 until c.columnCount) {
+                            try {
+                                val value = c.getString(i)
+                                if (isValidEthereumAddress(value)) {
+                                    Log.i(TAG, "🌈 Found Rainbow address: ${value.take(6)}...${value.takeLast(4)}")
+                                    return@withContext value
+                                }
+                            } catch (e: Exception) {
+                                // Continue checking other columns
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.d(TAG, "Rainbow URI failed: $uriString - ${e.message}")
+            }
+        }
+        
+        null
+    }
+    
+    /**
+     * Rabby-specific address extraction methods
+     */
+    private suspend fun tryRabbySpecificMethods(sessionId: String): String? = withContext(Dispatchers.IO) {
+        Log.d(TAG, "🐰 Trying Rabby-specific address extraction")
+        
+        // Rabby might use DeBankAPI patterns
+        val rabbyUris = listOf(
+            "content://com.debank.rabbymobile.provider/accounts",
+            "content://com.debank.rabbymobile.provider/wallet", 
+            "content://com.debank.rabbymobile/currentAccount"
+        )
+        
+        for (uriString in rabbyUris) {
+            try {
+                val uri = Uri.parse(uriString)
+                val cursor = context.contentResolver.query(uri, null, null, null, null)
+                cursor?.use { c ->
+                    if (c.moveToFirst()) {
+                        for (i in 0 until c.columnCount) {
+                            try {
+                                val value = c.getString(i)
+                                if (isValidEthereumAddress(value)) {
+                                    Log.i(TAG, "🐰 Found Rabby address: ${value.take(6)}...${value.takeLast(4)}")
+                                    return@withContext value
+                                }
+                            } catch (e: Exception) {
+                                // Continue checking other columns
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.d(TAG, "Rabby URI failed: $uriString - ${e.message}")
+            }
+        }
+        
+        null
+    }
+    
+    /**
+     * Phantom-specific address extraction methods
+     */
+    private suspend fun tryPhantomSpecificMethods(sessionId: String): String? = withContext(Dispatchers.IO) {
+        Log.d(TAG, "👻 Trying Phantom-specific address extraction")
+        
+        // Phantom might use Solana-style addresses, but we want Ethereum
+        val phantomUris = listOf(
+            "content://app.phantom.provider/ethereum",
+            "content://app.phantom.provider/accounts",
+            "content://app.phantom/ethereum_accounts"
+        )
+        
+        for (uriString in phantomUris) {
+            try {
+                val uri = Uri.parse(uriString)
+                val cursor = context.contentResolver.query(uri, null, null, null, null)
+                cursor?.use { c ->
+                    if (c.moveToFirst()) {
+                        for (i in 0 until c.columnCount) {
+                            try {
+                                val value = c.getString(i)
+                                if (isValidEthereumAddress(value)) {
+                                    Log.i(TAG, "👻 Found Phantom Ethereum address: ${value.take(6)}...${value.takeLast(4)}")
+                                    return@withContext value
+                                }
+                            } catch (e: Exception) {
+                                // Continue checking other columns
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.d(TAG, "Phantom URI failed: $uriString - ${e.message}")
+            }
+        }
+        
+        null
+    }
+    
+    /**
+     * Strategy 2: Query wallet app's content provider for address data
+     */
+    private suspend fun queryWalletContentProvider(walletPackageName: String, sessionId: String): String? = withContext(Dispatchers.IO) {
+        Log.d(TAG, "📋 Trying content provider query for $walletPackageName")
+        
+        val contentUris = listOf(
+            // Common content provider patterns for wallet apps
+            "content://$walletPackageName.provider/accounts",
+            "content://$walletPackageName.provider/addresses", 
+            "content://$walletPackageName.provider/wallet",
+            "content://$walletPackageName/accounts",
+            "content://$walletPackageName/addresses",
+            "content://$walletPackageName/wallet",
+            // MetaMask specific
+            "content://io.metamask.provider/accounts",
+            "content://io.metamask.provider/address",
+            // Coinbase specific
+            "content://org.toshi.provider/accounts",
+            "content://org.toshi.provider/address"
+        )
+        
+        for (uriString in contentUris) {
+            try {
+                val uri = Uri.parse(uriString)
+                val cursor: Cursor? = context.contentResolver.query(
+                    uri,
+                    arrayOf("address", "account", "ethereum_address", "wallet_address"),
+                    null,
+                    null,
+                    null
+                )
+                
+                cursor?.use { c ->
+                    if (c.moveToFirst()) {
+                        // Try different column names
+                        val possibleColumns = listOf("address", "account", "ethereum_address", "wallet_address")
+                        for (column in possibleColumns) {
+                            try {
+                                val columnIndex = c.getColumnIndex(column)
+                                if (columnIndex >= 0) {
+                                    val address = c.getString(columnIndex)
+                                    if (isValidEthereumAddress(address)) {
+                                        Log.i(TAG, "✅ Found address via content provider: $uriString")
+                                        return@withContext address
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                // Column doesn't exist or wrong type, continue
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.d(TAG, "Content provider query failed for $uriString: ${e.message}")
+            }
+        }
+        
+        null
+    }
+    
+    /**
+     * Strategy 2: Send intent to wallet requesting address
+     */
+    private suspend fun requestAddressViaIntent(walletPackageName: String, sessionId: String): String? = withContext(Dispatchers.IO) {
+        Log.d(TAG, "📤 Trying intent-based address request for $walletPackageName")
+        
+        return@withContext suspendCoroutine { continuation ->
+            pendingRequests[sessionId] = continuation
+            
+            try {
+                val addressRequestIntent = Intent().apply {
+                    action = "com.freepaypos.REQUEST_ADDRESS"
+                    setPackage(walletPackageName)
+                    putExtra("dapp_name", DAPP_NAME)
+                    putExtra("session_id", sessionId)
+                    putExtra("response_action", ACTION_WALLET_ADDRESS_RESPONSE)
+                    putExtra("callback_package", context.packageName)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                
+                context.startActivity(addressRequestIntent)
+                Log.d(TAG, "📤 Sent address request intent to $walletPackageName")
+                
+                // Set up timeout
+                scope.launch {
+                    delay(10000) // 10 second timeout for intent response
+                    if (pendingRequests.containsKey(sessionId)) {
+                        pendingRequests.remove(sessionId)
+                        continuation.resume(null)
+                    }
+                }
+                
+            } catch (e: Exception) {
+                Log.d(TAG, "Intent address request failed: ${e.message}")
+                pendingRequests.remove(sessionId)
+                continuation.resume(null)
+            }
+        }
+    }
+    
+    /**
+     * Strategy 3: Use wallet-specific deep links to request address
+     */
+    private suspend fun requestAddressViaDeepLink(walletPackageName: String, sessionId: String): String? = withContext(Dispatchers.IO) {
+        Log.d(TAG, "🔗 Trying practical deep link approach for $walletPackageName")
+        
+        return@withContext when (walletPackageName) {
+            "io.metamask" -> tryMetaMaskPracticalApproach(sessionId)
+            "org.toshi" -> tryCoinbasePracticalApproach(sessionId)
+            "me.rainbow" -> tryRainbowPracticalApproach(sessionId)
+            else -> tryGenericPracticalApproach(walletPackageName, sessionId)
+        }
+    }
+    
+    /**
+     * Practical MetaMask approach: Use transaction preview to reveal address
+     */
+    private suspend fun tryMetaMaskPracticalApproach(sessionId: String): String? = withContext(Dispatchers.IO) {
+        Log.d(TAG, "🦊 Using practical MetaMask approach - transaction preview")
+        
+        try {
+            // Open MetaMask with a transaction that will show the user's address in the "From" field
+            val transactionUri = "https://metamask.app.link/send/0x0000000000000000000000000000000000000000@1?value=0.000000000000000001"
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(transactionUri)).apply {
+                setPackage("io.metamask")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            
+            context.startActivity(intent)
+            Log.d(TAG, "🦊 Opened MetaMask transaction preview")
+            
+            // Give user 15 seconds to see their address and copy it
+            delay(2000)
+            
+            // Monitor clipboard for the address
+            return@withContext monitorClipboardForAddress(sessionId, 15000)
+            
+        } catch (e: Exception) {
+            Log.d(TAG, "MetaMask practical approach failed: ${e.message}")
+            return@withContext null
+        }
+    }
+    
+    /**
+     * Practical Coinbase approach: Use wallet info screen
+     */
+    private suspend fun tryCoinbasePracticalApproach(sessionId: String): String? = withContext(Dispatchers.IO) {
+        Log.d(TAG, "🔵 Using practical Coinbase approach")
+        
+        try {
+            // Open Coinbase with portfolio/wallet view
+            val portfolioUri = "cbwallet://wallet"
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(portfolioUri)).apply {
+                setPackage("org.toshi")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            
+            context.startActivity(intent)
+            Log.d(TAG, "🔵 Opened Coinbase wallet view")
+            
+            delay(2000)
+            return@withContext monitorClipboardForAddress(sessionId, 10000)
+            
+        } catch (e: Exception) {
+            Log.d(TAG, "Coinbase practical approach failed: ${e.message}")
+            return@withContext null
+        }
+    }
+    
+    /**
+     * Practical Rainbow approach: Use portfolio view
+     */
+    private suspend fun tryRainbowPracticalApproach(sessionId: String): String? = withContext(Dispatchers.IO) {
+        Log.d(TAG, "🌈 Using practical Rainbow approach")
+        
+        try {
+            val portfolioUri = "rainbow://portfolio"
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(portfolioUri)).apply {
+                setPackage("me.rainbow")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            
+            context.startActivity(intent)
+            Log.d(TAG, "🌈 Opened Rainbow portfolio")
+            
+            delay(2000)
+            return@withContext monitorClipboardForAddress(sessionId, 10000)
+            
+        } catch (e: Exception) {
+            Log.d(TAG, "Rainbow practical approach failed: ${e.message}")
+            return@withContext null
+        }
+    }
+    
+    /**
+     * Generic practical approach for other wallets
+     */
+    private suspend fun tryGenericPracticalApproach(walletPackageName: String, sessionId: String): String? = withContext(Dispatchers.IO) {
+        Log.d(TAG, "🔗 Using generic practical approach for $walletPackageName")
+        
+        try {
+            // Just open the wallet app normally
+            val packageManager = context.packageManager
+            val launchIntent = packageManager.getLaunchIntentForPackage(walletPackageName)
+            if (launchIntent != null) {
+                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(launchIntent)
+                Log.d(TAG, "🔗 Opened $walletPackageName")
+                
+                delay(2000)
+                return@withContext monitorClipboardForAddress(sessionId, 8000)
+            }
+            
+        } catch (e: Exception) {
+            Log.d(TAG, "Generic practical approach failed: ${e.message}")
+        }
+        
+        return@withContext null
+    }
+    
+    /**
+     * Monitor clipboard for Ethereum addresses
+     */
+    private suspend fun monitorClipboardForAddress(sessionId: String, timeoutMs: Long): String? = withContext(Dispatchers.IO) {
+        Log.d(TAG, "📋 Monitoring clipboard for address (${timeoutMs}ms timeout)")
+        
+        val startTime = System.currentTimeMillis()
+        var lastClipContent = ""
+        
+        while (System.currentTimeMillis() - startTime < timeoutMs) {
+            try {
+                val clipboardManager = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                val clipData = clipboardManager.primaryClip
+                
+                if (clipData != null && clipData.itemCount > 0) {
+                    val clipText = clipData.getItemAt(0).text?.toString()
+                    
+                    if (clipText != null && clipText != lastClipContent) {
+                        lastClipContent = clipText
+                        
+                        // Check if it's a valid Ethereum address
+                        if (isValidEthereumAddress(clipText.trim())) {
+                            Log.i(TAG, "✅ Found valid Ethereum address in clipboard: ${clipText.trim().take(6)}...${clipText.trim().takeLast(4)}")
+                            return@withContext clipText.trim()
+                        }
+                        
+                        // Check if clipboard contains text with an address pattern
+                        val addressPattern = Regex("0x[a-fA-F0-9]{40}")
+                        val match = addressPattern.find(clipText)
+                        if (match != null && isValidEthereumAddress(match.value)) {
+                            Log.i(TAG, "✅ Found valid Ethereum address pattern in clipboard: ${match.value.take(6)}...${match.value.takeLast(4)}")
+                            return@withContext match.value
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.d(TAG, "Clipboard monitoring error: ${e.message}")
+            }
+            
+            delay(500) // Check clipboard every 500ms
+        }
+        
+        Log.d(TAG, "📋 Clipboard monitoring timeout after ${timeoutMs}ms")
+        return@withContext null
+    }
+    
+    /**
+     * Strategy 4: Send broadcast to wallet requesting address
+     */
+    private suspend fun requestAddressViaBroadcast(walletPackageName: String, sessionId: String): String? = withContext(Dispatchers.IO) {
+        Log.d(TAG, "📡 Trying broadcast address request for $walletPackageName")
+        
+        return@withContext suspendCoroutine { continuation ->
+            pendingRequests[sessionId] = continuation
+            
+            try {
+                val broadcastIntent = Intent().apply {
+                    action = "com.freepaypos.REQUEST_WALLET_ADDRESS"
+                    setPackage(walletPackageName)
+                    putExtra("dapp_name", DAPP_NAME)
+                    putExtra("session_id", sessionId)
+                    putExtra("response_action", ACTION_WALLET_ADDRESS_RESPONSE)
+                    putExtra("callback_package", context.packageName)
+                }
+                
+                context.sendBroadcast(broadcastIntent)
+                Log.d(TAG, "📡 Sent broadcast address request to $walletPackageName")
+                
+                // Set up timeout
+                scope.launch {
+                    delay(5000) // 5 second timeout for broadcast response
+                    if (pendingRequests.containsKey(sessionId)) {
+                        pendingRequests.remove(sessionId)
+                        continuation.resume(null)
+                    }
+                }
+                
+            } catch (e: Exception) {
+                Log.d(TAG, "Broadcast address request failed: ${e.message}")
+                pendingRequests.remove(sessionId)
+                continuation.resume(null)
+            }
+        }
+    }
+    
+    /**
+     * Handle incoming wallet address responses
+     */
+    private fun handleWalletResponse(intent: Intent?) {
+        if (intent?.action != ACTION_WALLET_ADDRESS_RESPONSE) return
+        
+        val sessionId = intent.getStringExtra(EXTRA_SESSION_ID)
+        val address = intent.getStringExtra(EXTRA_WALLET_ADDRESS)
+        val success = intent.getBooleanExtra(EXTRA_SUCCESS, false)
+        
+        Log.d(TAG, "📨 Received wallet response - Session: $sessionId, Success: $success, Address: ${address?.take(6)}...${address?.takeLast(4)}")
+        
+        if (sessionId != null && pendingRequests.containsKey(sessionId)) {
+            val continuation = pendingRequests.remove(sessionId)
+            
+            if (success && address != null && isValidEthereumAddress(address)) {
+                Log.i(TAG, "✅ Received valid address via broadcast: ${address.take(6)}...${address.takeLast(4)}")
+                continuation?.resume(address)
+            } else {
+                Log.w(TAG, "❌ Received invalid or unsuccessful response")
+                continuation?.resume(null)
+            }
+        } else {
+            Log.w(TAG, "⚠️ Received response for unknown or expired session: $sessionId")
+        }
+    }
+    
+    /**
+     * Validate Ethereum address format
+     */
+    private fun isValidEthereumAddress(address: String?): Boolean {
+        if (address == null) return false
+        val cleanAddress = address.trim()
+        
+        // Check if it starts with 0x and has correct length
+        if (!cleanAddress.startsWith("0x")) return false
+        if (cleanAddress.length != 42) return false
+        
+        // Check if all characters after 0x are valid hex
+        val hexPart = cleanAddress.substring(2)
+        return hexPart.all { it.isDigit() || it.lowercaseChar() in 'a'..'f' }
     }
     
     private fun openWalletWithSmartConnection(packageName: String, walletName: String, connectionUris: List<String>): Boolean {
@@ -639,6 +1500,18 @@ class WalletConnectManager(private val context: Context) {
      */
     fun cleanup() {
         disconnect()
+        
+        // Unregister broadcast receiver
+        try {
+            context.unregisterReceiver(walletResponseReceiver)
+            Log.d(TAG, "✅ Unregistered wallet response broadcast receiver")
+        } catch (e: Exception) {
+            Log.w(TAG, "⚠️ Error unregistering broadcast receiver: ${e.message}")
+        }
+        
+        // Clear pending requests
+        pendingRequests.clear()
+        
         scope.cancel()
     }
 } 

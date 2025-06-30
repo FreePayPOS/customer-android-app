@@ -4,6 +4,10 @@
 
     <!-- ① Add this line -->
     <uses-permission android:name="android.permission.NFC"/>
+    
+    <!-- Permissions for direct wallet communication -->
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <uses-permission android:name="android.permission.INTERNET"/>
 
     <!-- ② (optional but recommended) declare HCE capability -->
     <uses-feature android:name="android.hardware.nfc.hce"
@@ -38,6 +42,42 @@
             <data android:scheme="cbwallet" />
         </intent>
         
+        <!-- New wallet schemes -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="rabby" />
+        </intent>
+        
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="phantom" />
+        </intent>
+        
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="daimo" />
+        </intent>
+        
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="railway" />
+        </intent>
+        
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="payy" />
+        </intent>
+        
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="stables" />
+        </intent>
+        
+        <!-- Direct wallet address requests -->
+        <intent>
+            <action android:name="com.freepaypos.REQUEST_ADDRESS" />
+        </intent>
+        
         <!-- Specific wallet packages -->
         <package android:name="io.metamask" />
         <package android:name="me.rainbow" />
@@ -52,6 +92,12 @@
         <package android:name="com.exodus" />
         <package android:name="com.myetherwallet.mewwallet" />
         <package android:name="org.ethereum.mist" />
+        <package android:name="com.debank.rabbymobile" />
+        <package android:name="app.phantom" />
+        <package android:name="com.daimo" />
+        <package android:name="com.railway.rtp" />
+        <package android:name="com.polybaselabs.wallet" />
+        <package android:name="money.stables" />
     </queries>
 
     <application

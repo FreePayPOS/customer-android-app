@@ -87,31 +87,45 @@ class CardService : HostApduService() {
                 sendDataToActivity("✅ Sent wallet address: ${walletAddress.take(6)}...${walletAddress.takeLast(4)}")
                 return payload + SELECT_OK
             } else {
-                // Fallback address
-                val fallbackAddress = "0x3f1214074399e56D0D7224056eb7f41c5E8619C4"
-                val payload = fallbackAddress.toByteArray(Charsets.UTF_8)
-                Log.d(TAG, "⚠️ GET response: Using fallback address: $fallbackAddress")
-                sendDataToActivity("⚠️ No wallet configured - sent fallback address")
-                return payload + SELECT_OK
+                Log.e(TAG, "❌ No wallet configured - cannot provide address")
+                sendDataToActivity("❌ No wallet configured - please set up a wallet first")
+                return byteArrayOf(0x6A.toByte(), 0x82.toByte()) // File not found
             }
         }
 
-        // 3. Handle PAYMENT command (80CF0000 + NDEF data)
+        // 3. Handle PAYMENT command (80CF0000 + NDEFLength + NDEF data)
         if (commandApdu.size >= PAYMENT_CMD_PREFIX.size &&
             commandApdu.take(PAYMENT_CMD_PREFIX.size).toByteArray().contentEquals(PAYMENT_CMD_PREFIX)
         ) {
             Log.d(TAG, "Handling PAYMENT command")
 
-            // Extract NDEF data (everything after the 4-byte command)
-            if (commandApdu.size > PAYMENT_CMD_PREFIX.size) {
-                val ndefData = commandApdu.drop(PAYMENT_CMD_PREFIX.size).toByteArray()
-                Log.d(TAG, "NDEF data: ${bytesToHex(ndefData)} (length: ${ndefData.size})")
-
-                return handleNDEFPaymentRequest(ndefData)
-            } else {
-                Log.w(TAG, "PAYMENT command received but no NDEF data")
+            // Check if we have at least the command + length byte
+            if (commandApdu.size <= PAYMENT_CMD_PREFIX.size) {
+                Log.w(TAG, "PAYMENT command received but no length/data")
                 return byteArrayOf(0x6A.toByte(), 0x80.toByte()) // Wrong data
             }
+
+            // Extract NDEF length - always use 1-byte length as specified
+            val lengthStartIndex = PAYMENT_CMD_PREFIX.size
+            val ndefLength = commandApdu[lengthStartIndex].toInt() and 0xFF
+            val lengthBytes = 1
+            val ndefDataStartIndex = lengthStartIndex + lengthBytes
+            
+            Log.d(TAG, "PAYMENT command structure - Command: ${bytesToHex(commandApdu.take(PAYMENT_CMD_PREFIX.size).toByteArray())}, NDEFLength: $ndefLength (1 byte), Total APDU size: ${commandApdu.size}")
+
+            // Validate we have enough data
+            val expectedTotalSize = PAYMENT_CMD_PREFIX.size + lengthBytes + ndefLength
+            if (commandApdu.size < expectedTotalSize) {
+                Log.e(TAG, "PAYMENT command data incomplete - expected $expectedTotalSize bytes, got ${commandApdu.size}")
+                Log.e(TAG, "Missing ${expectedTotalSize - commandApdu.size} bytes of NDEF data")
+                return byteArrayOf(0x6A.toByte(), 0x80.toByte()) // Wrong data
+            }
+
+            // Extract exactly the specified amount of NDEF data
+            val ndefData = Arrays.copyOfRange(commandApdu, ndefDataStartIndex, ndefDataStartIndex + ndefLength)
+            Log.d(TAG, "Extracted NDEF data: ${bytesToHex(ndefData)} (specified length: $ndefLength, actual length: ${ndefData.size})")
+
+            return handleNDEFPaymentRequest(ndefData)
         }
 
         // 4. Unknown command
@@ -179,6 +193,12 @@ class CardService : HostApduService() {
 
     private fun handleEthereumPaymentRequest(ethereumUri: String) {
         Log.i(TAG, "Opening wallet with URI: $ethereumUri")
+        Log.i(TAG, "URI length: ${ethereumUri.length} characters")
+
+        // Check for potential URI length issues
+        if (ethereumUri.length > 2000) {
+            Log.w(TAG, "⚠️ Very long URI detected (${ethereumUri.length} chars) - some wallets may have issues")
+        }
 
         // Get the selected wallet
         val selectedWallet = walletManager.getSelectedWalletInfo()
@@ -186,91 +206,98 @@ class CardService : HostApduService() {
         if (selectedWallet != null) {
             Log.i(TAG, "Using selected wallet: ${selectedWallet.appName} (${selectedWallet.packageName})")
             
-            try {
-                // Create intent for specific wallet
-                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(ethereumUri))
-                intent.setPackage(selectedWallet.packageName)
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                startActivity(intent)
-                
-                Log.i(TAG, "Successfully launched selected wallet: ${selectedWallet.appName}")
-                
-                // Send broadcast to update UI
-                sendDataToActivity("Payment request sent to ${selectedWallet.appName}")
-                return
-                
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to open selected wallet: ${selectedWallet.appName}", e)
-                
-                // Check if wallet is still installed
-                if (!walletManager.isWalletInstalled(selectedWallet.packageName)) {
-                    Log.w(TAG, "Selected wallet is no longer installed, clearing selection")
-                    walletManager.clearSelectedWallet()
-                    sendDataToActivity("Selected wallet not found, please select a new wallet")
+            // Try multiple intent approaches for better compatibility
+            val intentStrategies = listOf(
+                // Strategy 1: Standard intent with minimal flags
+                { 
+                    Intent(Intent.ACTION_VIEW, Uri.parse(ethereumUri)).apply {
+                        setPackage(selectedWallet.packageName)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                },
+                // Strategy 2: Intent with CLEAR_TOP flag (helps with some wallet apps)
+                {
+                    Intent(Intent.ACTION_VIEW, Uri.parse(ethereumUri)).apply {
+                        setPackage(selectedWallet.packageName)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                    }
+                },
+                // Strategy 3: Intent with SINGLE_TOP flag
+                {
+                    Intent(Intent.ACTION_VIEW, Uri.parse(ethereumUri)).apply {
+                        setPackage(selectedWallet.packageName)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    }
                 }
-                
-                // Fall through to generic wallet opening
+            )
+            
+            for ((index, strategy) in intentStrategies.withIndex()) {
+                try {
+                    val intent = strategy()
+                    Log.d(TAG, "Trying intent strategy ${index + 1} for ${selectedWallet.appName}")
+                    
+                    // Additional logging for debugging
+                    Log.d(TAG, "Intent action: ${intent.action}")
+                    Log.d(TAG, "Intent data: ${intent.data}")
+                    Log.d(TAG, "Intent package: ${intent.`package`}")
+                    Log.d(TAG, "Intent flags: ${intent.flags}")
+                    
+                    startActivity(intent)
+                    
+                    Log.i(TAG, "✅ Successfully launched ${selectedWallet.appName} with strategy ${index + 1}")
+                    sendDataToActivity("Payment request sent to ${selectedWallet.appName}")
+                    return
+                    
+                } catch (e: Exception) {
+                    Log.w(TAG, "Strategy ${index + 1} failed for ${selectedWallet.appName}: ${e.message}")
+                }
             }
+            
+            // If all strategies failed
+            Log.e(TAG, "❌ All intent strategies failed for ${selectedWallet.appName}")
+            
+            // Check if wallet is still installed
+            if (!walletManager.isWalletInstalled(selectedWallet.packageName)) {
+                Log.w(TAG, "Selected wallet is no longer installed, clearing selection")
+                walletManager.clearSelectedWallet()
+                sendDataToActivity("Selected wallet not found, please select a new wallet")
+                return
+            }
+            
+            // Try opening wallet app directly first, then user can paste URI manually
+            try {
+                val packageManager = packageManager
+                val launchIntent = packageManager.getLaunchIntentForPackage(selectedWallet.packageName)
+                if (launchIntent != null) {
+                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    startActivity(launchIntent)
+                    Log.i(TAG, "⚠️ Opened ${selectedWallet.appName} directly - URI may be too complex")
+                    sendDataToActivity("Opened ${selectedWallet.appName} - please paste the payment URI manually if needed")
+                    return
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to open ${selectedWallet.appName} directly: ${e.message}")
+            }
+            
+            sendDataToActivity("❌ Failed to open ${selectedWallet.appName} - please open manually")
+            
         } else {
             Log.w(TAG, "No wallet selected, using generic intent")
             sendDataToActivity("No wallet selected - showing app picker")
         }
 
-        // Fallback: Use generic intent (original behavior)
+        // Generic fallback when no wallet is selected
+        Log.i(TAG, "Attempting generic wallet intent (system app picker)")
         try {
             val intent = Intent(Intent.ACTION_VIEW, Uri.parse(ethereumUri))
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             startActivity(intent)
-            Log.i(TAG, "Successfully launched generic wallet intent")
+            Log.i(TAG, "✅ Successfully launched generic wallet intent")
+            sendDataToActivity("Payment request sent to system app picker")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to open wallet app with generic intent", e)
-
-            // Final fallback: Try to find wallet apps specifically
-            try {
-                val pm = packageManager
-                val activities = pm.queryIntentActivities(
-                    Intent(Intent.ACTION_VIEW, Uri.parse("ethereum:")),
-                    PackageManager.MATCH_DEFAULT_ONLY
-                )
-
-                if (activities.isNotEmpty()) {
-                    Log.i(TAG, "Trying fallback wallet app: ${activities[0].activityInfo.packageName}")
-                    val walletIntent = Intent(Intent.ACTION_VIEW, Uri.parse(ethereumUri))
-                    walletIntent.setPackage(activities[0].activityInfo.packageName)
-                    walletIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    startActivity(walletIntent)
-                    sendDataToActivity("Payment request sent to ${activities[0].loadLabel(pm)}")
-                } else {
-                    Log.e(TAG, "No wallet apps found to handle ethereum: URIs")
-                    sendDataToActivity("No wallet apps found - please install a wallet app")
-
-                    // Try some common wallet package names as last resort
-                    val commonWallets = listOf(
-                        "io.metamask" to "MetaMask",
-                        "me.rainbow" to "Rainbow Wallet",
-                        "org.ethereum.mist" to "Mist Browser",
-                        "com.coinbase.android" to "Coinbase Wallet"
-                    )
-
-                    for ((packageName, displayName) in commonWallets) {
-                        try {
-                            pm.getPackageInfo(packageName, 0)
-                            Log.i(TAG, "Trying common wallet: $displayName")
-                            val walletIntent = Intent(Intent.ACTION_VIEW, Uri.parse(ethereumUri))
-                            walletIntent.setPackage(packageName)
-                            walletIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            startActivity(walletIntent)
-                            sendDataToActivity("Payment request sent to $displayName")
-                            break
-                        } catch (ex: Exception) {
-                            // Wallet not installed, try next
-                        }
-                    }
-                }
-            } catch (fallbackError: Exception) {
-                Log.e(TAG, "All wallet opening attempts failed", fallbackError)
-                sendDataToActivity("Failed to open wallet - please check your wallet apps")
-            }
+            Log.e(TAG, "❌ Failed to open wallet app with generic intent: ${e.message}")
+            Log.i(TAG, "URI that failed: ${ethereumUri.take(100)}${if (ethereumUri.length > 100) "..." else ""}")
+            sendDataToActivity("❌ Failed to open wallet - please install a wallet app or set up wallet selection")
         }
     }
 
@@ -299,35 +326,94 @@ class CardService : HostApduService() {
                 return null
             }
 
-            // Verify it's a URI record
-            val recordHeader = ndefData[0]
-            val typeLength = ndefData[1]
-            val payloadLength = ndefData[2]
-            val recordType = ndefData[3]
-
-            Log.d(TAG, "NDEF record - Header: ${String.format("%02X", recordHeader)}, TypeLen: ${String.format("%02X", typeLength)}, PayloadLen: ${String.format("%02X", payloadLength)}, Type: ${String.format("%02X", recordType)}")
+            // Parse NDEF record header properly
+            val recordHeader = ndefData[0].toInt() and 0xFF
+            val typeLength = ndefData[1].toInt() and 0xFF
+            
+            // Check if it's a Short Record (SR bit = bit 4)
+            val isShortRecord = (recordHeader and 0x10) != 0
+            val hasIdLength = (recordHeader and 0x08) != 0
+            
+            Log.d(TAG, "NDEF Header Analysis - Header: 0x${String.format("%02X", recordHeader)}, TypeLen: $typeLength, ShortRecord: $isShortRecord, HasIdLength: $hasIdLength")
+            
+            // Parse payload length (1 byte for short record, 4 bytes for long record)
+            val (payloadLength, payloadLengthBytes) = if (isShortRecord) {
+                val length = ndefData[2].toInt() and 0xFF
+                Pair(length, 1)
+            } else {
+                // Long record - 4 byte payload length (big endian)
+                if (ndefData.size < 6) {
+                    Log.e(TAG, "NDEF data too short for long record")
+                    return null
+                }
+                val length = ((ndefData[2].toInt() and 0xFF) shl 24) or
+                           ((ndefData[3].toInt() and 0xFF) shl 16) or
+                           ((ndefData[4].toInt() and 0xFF) shl 8) or
+                           (ndefData[5].toInt() and 0xFF)
+                Pair(length, 4)
+            }
+            
+            // Calculate positions
+            val typeStart = 2 + payloadLengthBytes
+            val idLengthPos = if (hasIdLength) typeStart + typeLength else -1
+            val idLength = if (hasIdLength) ndefData[idLengthPos].toInt() and 0xFF else 0
+            val payloadStart = typeStart + typeLength + (if (hasIdLength) 1 + idLength else 0)
+            
+            if (ndefData.size < payloadStart) {
+                Log.e(TAG, "NDEF data too short - expected at least $payloadStart bytes, got ${ndefData.size}")
+                return null
+            }
+            
+            val recordType = ndefData[typeStart]
+            
+            Log.d(TAG, "NDEF record - PayloadLen: $payloadLength, PayloadStart: $payloadStart, Type: ${String.format("%02X", recordType)}")
 
             // Check if it's a Well-Known URI record
-            if ((recordHeader.toInt() and 0x07) != 0x01 ||  // TNF must be 001 (Well Known)
-                typeLength.toInt() != 0x01 ||               // Type length must be 1
-                recordType.toInt() != 0x55) {               // Type must be 'U' (0x55)
-                Log.e(TAG, "Not a valid URI record")
+            if ((recordHeader and 0x07) != 0x01 ||  // TNF must be 001 (Well Known)
+                typeLength != 0x01 ||               // Type length must be 1
+                (recordType.toInt() and 0xFF) != 0x55) {  // Type must be 'U' (0x55)
+                Log.e(TAG, "Not a valid URI record - TNF: ${recordHeader and 0x07}, TypeLen: $typeLength, Type: ${String.format("%02X", recordType)}")
                 return null
             }
 
             // Extract URI abbreviation and data
-            val uriAbbreviation = ndefData[4]
+            if (payloadStart >= ndefData.size) {
+                Log.e(TAG, "No payload data available")
+                return null
+            }
+            
+            val uriAbbreviation = ndefData[payloadStart]
             val uriDataLength = payloadLength - 1 // Subtract 1 for abbreviation byte
 
-            Log.d(TAG, "URI abbreviation: ${String.format("%02X", uriAbbreviation)}, data length: $uriDataLength")
+            Log.d(TAG, "URI abbreviation: ${String.format("%02X", uriAbbreviation)}, data length: $uriDataLength, total NDEF size: ${ndefData.size}")
 
-            if (ndefData.size < 5 + uriDataLength) {
-                Log.e(TAG, "NDEF data truncated")
-                return null
+            val uriDataStart = payloadStart + 1  // Skip the abbreviation byte
+            val uriDataEnd = payloadStart + payloadLength
+            
+            if (ndefData.size < uriDataEnd) {
+                Log.e(TAG, "NDEF data truncated - expected $uriDataEnd bytes, got ${ndefData.size}")
+                Log.e(TAG, "Attempting to parse with available data...")
+                
+                // Try to extract what we can
+                val availableDataLength = ndefData.size - uriDataStart
+                if (availableDataLength <= 0) {
+                    Log.e(TAG, "No URI data available")
+                    return null
+                }
+                
+                val uriBytes = Arrays.copyOfRange(ndefData, uriDataStart, ndefData.size)
+                val uri = String(uriBytes, StandardCharsets.UTF_8)
+                Log.w(TAG, "Extracted partial URI (may be truncated): '$uri'")
+                
+                // Handle URI abbreviation codes (we use 0x00 = no abbreviation)
+                val fullUri = applyUriAbbreviation(uriAbbreviation, uri)
+                Log.d(TAG, "Partial URI after abbreviation handling: '$fullUri'")
+                
+                return if (fullUri != null && fullUri.startsWith("ethereum:")) fullUri else null
             }
 
             // Extract the URI data
-            val uriBytes = Arrays.copyOfRange(ndefData, 5, 5 + uriDataLength)
+            val uriBytes = Arrays.copyOfRange(ndefData, uriDataStart, uriDataEnd)
             val uri = String(uriBytes, StandardCharsets.UTF_8)
 
             Log.d(TAG, "Extracted raw URI: '$uri'")
@@ -422,6 +508,8 @@ class CardService : HostApduService() {
             }
         }
     }
+
+
 
     private fun sendDataToActivity(message: String) {
         val intent = Intent("com.freepaypos.NFC_DATA_RECEIVED")
