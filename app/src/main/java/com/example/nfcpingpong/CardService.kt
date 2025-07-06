@@ -165,13 +165,18 @@ class CardService : HostApduService() {
         Log.d(TAG, "Current state - Selected wallet: ${selectedWallet?.appName}, Address: $walletAddress")
         
         if (walletAddress != null) {
-            // Convert address to bytes and append success status
-            val addressBytes = walletAddress.toByteArray(Charsets.UTF_8)
-            Log.d(TAG, "✅ Returning wallet address: $walletAddress")
+            // Format address in CAIP-10 format: namespace:reference:address
+            // For Ethereum mainnet: eip155:1:0x...
+            val chainId = 1 // Default to Ethereum mainnet, could be made configurable
+            val caip10Address = "eip155:$chainId:$walletAddress"
+            
+            // Convert to bytes
+            val addressBytes = caip10Address.toByteArray(Charsets.UTF_8)
+            Log.d(TAG, "✅ Returning CAIP-10 formatted address: $caip10Address")
             Log.d(TAG, "Address bytes length: ${addressBytes.size}")
             sendDataToActivity("✅ Sent wallet address: ${walletAddress.take(6)}...${walletAddress.takeLast(4)}")
             
-            // Return just the address bytes
+            // Return the CAIP-10 formatted address bytes
             Log.d(TAG, "Response length: ${addressBytes.size}, hex: ${bytesToHex(addressBytes)}")
             return addressBytes
         } else {
