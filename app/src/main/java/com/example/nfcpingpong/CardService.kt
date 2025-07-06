@@ -19,8 +19,6 @@ class CardService : HostApduService() {
 
     /** APDU sent by reader to select our application */
     private val SELECT_PREFIX = byteArrayOf(0x00, 0xA4.toByte(), 0x04, 0x00)
-    /** Our invented "GET_STRING" APDU -> 80 CA 00 00 00 */
-    private val GET_STRING_CMD = byteArrayOf(0x80.toByte(), 0xCA.toByte(), 0x00, 0x00, 0x00)
     /** PAYMENT command prefix -> 80 CF 00 00 (4 bytes, not 5!) */
     private val PAYMENT_CMD_PREFIX = byteArrayOf(0x80.toByte(), 0xCF.toByte(), 0x00.toByte(), 0x00.toByte())
 
@@ -71,29 +69,7 @@ class CardService : HostApduService() {
             return SELECT_OK
         }
 
-        // 2. Reader asks for the payload (GET command)
-        if (commandApdu.contentEquals(GET_STRING_CMD)) {
-            Log.d(TAG, "✅ Handling GET_STRING command")
-            
-            // Get wallet address from saved selection
-            val walletAddress = walletManager.getWalletAddress()
-            val selectedWallet = walletManager.getSelectedWalletInfo()
-            
-            Log.d(TAG, "Current state - Selected wallet: ${selectedWallet?.appName}, Address: $walletAddress")
-            
-            if (walletAddress != null) {
-                val payload = walletAddress.toByteArray(Charsets.UTF_8)
-                Log.d(TAG, "✅ GET response: Using saved address: $walletAddress")
-                sendDataToActivity("✅ Sent wallet address: ${walletAddress.take(6)}...${walletAddress.takeLast(4)}")
-                return payload + SELECT_OK
-            } else {
-                Log.e(TAG, "❌ No wallet configured - cannot provide address")
-                sendDataToActivity("❌ No wallet configured - please set up a wallet first")
-                return byteArrayOf(0x6A.toByte(), 0x82.toByte()) // File not found
-            }
-        }
-
-        // 3. Handle PAYMENT command (80CF0000 + NDEFLength + NDEF data)
+        // 2. Handle PAYMENT command (80CF0000 + NDEFLength + NDEF data)
         if (commandApdu.size >= PAYMENT_CMD_PREFIX.size &&
             commandApdu.take(PAYMENT_CMD_PREFIX.size).toByteArray().contentEquals(PAYMENT_CMD_PREFIX)
         ) {
@@ -128,6 +104,12 @@ class CardService : HostApduService() {
             return handleNDEFPaymentRequest(ndefData)
         }
 
+        // 3. Check if this is a raw NDEF record (starts with 0xD1)
+        if (commandApdu.isNotEmpty() && (commandApdu[0].toInt() and 0xFF) == 0xD1) {
+            Log.d(TAG, "Detected raw NDEF record")
+            return handleNDEFPaymentRequest(commandApdu)
+        }
+
         // 4. Unknown command
         Log.w(TAG, "Unknown command received")
         return UNKNOWN
@@ -135,26 +117,67 @@ class CardService : HostApduService() {
 
     private fun handleNDEFPaymentRequest(ndefData: ByteArray): ByteArray {
         Log.d(TAG, "Processing NDEF payment request...")
+        Log.d(TAG, "NDEF data length: ${ndefData.size}")
+        Log.d(TAG, "NDEF hex: ${bytesToHex(ndefData)}")
 
-        // Parse NDEF and extract the ethereum: URI
-        val ethereumUri: String? = this.parseEthereumUriFromNDEF(ndefData)
+        // Parse NDEF and extract the URI (could be ethereum: or wallet:)
+        val parsedUri: String? = this.parseUriFromNDEF(ndefData)
 
-        if (ethereumUri != null) {
-            Log.i(TAG, "Successfully parsed Ethereum URI: $ethereumUri")
+        if (parsedUri != null) {
+            Log.i(TAG, "Successfully parsed URI: '$parsedUri'")
+            Log.i(TAG, "URI length: ${parsedUri.length}")
 
-            // Parse chain ID from URI for additional logging
-            val chainId = extractChainIdFromUri(ethereumUri)
-            if (chainId != null) {
-                Log.i(TAG, "Detected chain ID: $chainId")
-                val chainName = getChainName(chainId)
-                Log.i(TAG, "Chain: $chainName")
+            // Check if it's a wallet:address command
+            if (parsedUri.trim() == "wallet:address") {
+                Log.i(TAG, "Handling wallet:address command")
+                return handleWalletAddressRequest()
             }
 
-            handleEthereumPaymentRequest(ethereumUri)
-            return byteArrayOf(0x90.toByte(), 0x00.toByte()) // Success
+            // Otherwise, treat it as an ethereum: URI
+            if (parsedUri.startsWith("ethereum:")) {
+                // Parse chain ID from URI for additional logging
+                val chainId = extractChainIdFromUri(parsedUri)
+                if (chainId != null) {
+                    Log.i(TAG, "Detected chain ID: $chainId")
+                    val chainName = getChainName(chainId)
+                    Log.i(TAG, "Chain: $chainName")
+                }
+
+                handleEthereumPaymentRequest(parsedUri)
+                return byteArrayOf(0x90.toByte(), 0x00.toByte()) // Success
+            } else {
+                Log.e(TAG, "Unsupported URI scheme: $parsedUri")
+                return byteArrayOf(0x6A.toByte(), 0x80.toByte()) // Wrong data
+            }
         } else {
-            Log.e(TAG, "Failed to parse Ethereum URI from NDEF")
+            Log.e(TAG, "Failed to parse URI from NDEF")
             return byteArrayOf(0x6A.toByte(), 0x80.toByte()) // Wrong data
+        }
+    }
+
+    private fun handleWalletAddressRequest(): ByteArray {
+        Log.d(TAG, "Handling wallet:address request")
+        
+        // Get wallet address from saved selection
+        val walletAddress = walletManager.getWalletAddress()
+        val selectedWallet = walletManager.getSelectedWalletInfo()
+        
+        Log.d(TAG, "Current state - Selected wallet: ${selectedWallet?.appName}, Address: $walletAddress")
+        
+        if (walletAddress != null) {
+            // Convert address to bytes and append success status
+            val addressBytes = walletAddress.toByteArray(Charsets.UTF_8)
+            Log.d(TAG, "✅ Returning wallet address: $walletAddress")
+            Log.d(TAG, "Address bytes length: ${addressBytes.size}")
+            sendDataToActivity("✅ Sent wallet address: ${walletAddress.take(6)}...${walletAddress.takeLast(4)}")
+            
+            // Return just the address bytes
+            Log.d(TAG, "Response length: ${addressBytes.size}, hex: ${bytesToHex(addressBytes)}")
+            return addressBytes
+        } else {
+            Log.e(TAG, "❌ No wallet configured - cannot provide address")
+            sendDataToActivity("❌ No wallet configured - please set up a wallet first")
+            return byteArrayOf(0x6A.toByte(), 0x82.toByte()) // File not found
         }
     }
 
@@ -309,7 +332,7 @@ class CardService : HostApduService() {
         return result.toString()
     }
 
-    private fun parseEthereumUriFromNDEF(ndefData: ByteArray): String? {
+    private fun parseUriFromNDEF(ndefData: ByteArray): String? {
         try {
             Log.d(TAG, "Parsing NDEF data: ${bytesToHex(ndefData)}")
 
@@ -409,7 +432,7 @@ class CardService : HostApduService() {
                 val fullUri = applyUriAbbreviation(uriAbbreviation, uri)
                 Log.d(TAG, "Partial URI after abbreviation handling: '$fullUri'")
                 
-                return if (fullUri != null && fullUri.startsWith("ethereum:")) fullUri else null
+                return if (fullUri != null && (fullUri.startsWith("ethereum:") || fullUri.trim() == "wallet:address")) fullUri else null
             }
 
             // Extract the URI data
@@ -423,18 +446,26 @@ class CardService : HostApduService() {
 
             Log.d(TAG, "Full URI after abbreviation handling: '$fullUri'")
 
-            // Verify it's an Ethereum URI and validate the format
-            if (fullUri != null && fullUri.startsWith("ethereum:")) {
-                // Additional validation for EIP-681 format
-                if (isValidEIP681Uri(fullUri)) {
-                    Log.i(TAG, "Successfully extracted valid EIP-681 URI: $fullUri")
-                    return fullUri
+            // Verify it's either an Ethereum URI or wallet:address command
+            if (fullUri != null) {
+                if (fullUri.startsWith("ethereum:")) {
+                    // Additional validation for EIP-681 format
+                    if (isValidEIP681Uri(fullUri)) {
+                        Log.i(TAG, "Successfully extracted valid EIP-681 URI: $fullUri")
+                        return fullUri
+                    } else {
+                        Log.w(TAG, "URI format may not be fully EIP-681 compliant but proceeding: $fullUri")
+                        return fullUri  // Still try to process it
+                    }
+                } else if (fullUri.trim() == "wallet:address") {
+                    Log.i(TAG, "Successfully extracted wallet:address command")
+                    return fullUri.trim()
                 } else {
-                    Log.w(TAG, "URI format may not be fully EIP-681 compliant but proceeding: $fullUri")
-                    return fullUri  // Still try to process it
+                    Log.e(TAG, "Not a supported URI: '$fullUri'")
+                    return null
                 }
             } else {
-                Log.e(TAG, "Not an Ethereum URI: '$fullUri'")
+                Log.e(TAG, "Null URI extracted from NDEF")
                 return null
             }
         } catch (e: Exception) {

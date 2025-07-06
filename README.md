@@ -67,14 +67,14 @@ Go to Android Settings → Connections → NFC and enable it.
 ### Key Components
 
 - **WalletManager**: Detects installed wallets and manages address storage
-- **CardService**: NFC Host Card Emulation using proprietary AID `D2760000850101`
+- **CardService**: NFC Host Card Emulation using proprietary AID `F043525950544F`
 - **Connection Manager**: Handles guided wallet opening with deep links and user instructions
 - **MainActivity**: Modern Jetpack Compose UI with real-time status updates
 
 ### NFC Protocol
 
-- **AID**: `D2760000850101` (proprietary, non-payment card)
-- **Commands**: SELECT, GET (address), PAYMENT (EIP-681 URIs)
+- **AID**: `F043525950544F` (proprietary, non-payment card)
+- **Commands**: SELECT, PAYMENT (handles both EIP-681 URIs and wallet:address)
 - **Response**: Stored wallet address or fallback address
 
 ## 🌐 Supported Networks

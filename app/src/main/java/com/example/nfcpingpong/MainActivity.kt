@@ -109,7 +109,7 @@ class MainActivity : ComponentActivity() {
             val result = cardEmulation.registerAidsForService(
                 component,
                 CardEmulation.CATEGORY_OTHER,
-                listOf("F2222222222222")
+                listOf("F043525950544F")
             )
             Log.d(TAG, "Dynamic AID registration result: $result")
             result
@@ -127,7 +127,7 @@ class MainActivity : ComponentActivity() {
         }
         
         // Check if our service is the default for the AID
-        val isDefault = cardEmulation.isDefaultServiceForAid(component, "D2760000850101")
+        val isDefault = cardEmulation.isDefaultServiceForAid(component, "F043525950544F")
         Log.d(TAG, "Is default service for AID: $isDefault")
         
         // Get list of registered AIDs for our service
