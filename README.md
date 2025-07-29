@@ -14,6 +14,8 @@ When tapping to a FreePay POS terminal it will automatically open your selected 
 
 See a full compatibility list on the [FreePay Website](https://freepaypos.org)
 
+If you'd like your wallet to be compatible with FreePay, check out our [Wallet Integration Guide](./WALLET_INTEGRATION.md)
+
 ## 🛠️ Setup & Installation
 
 ### Quick Start
