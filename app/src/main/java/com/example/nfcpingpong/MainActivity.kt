@@ -112,7 +112,7 @@ class MainActivity : ComponentActivity() {
             val result = cardEmulation.registerAidsForService(
                 component,
                 CardEmulation.CATEGORY_OTHER,
-                listOf("F043525950544F")
+                listOf("F046524545504159")
             )
             Log.d(TAG, "Dynamic AID registration result: $result")
             result
@@ -130,7 +130,7 @@ class MainActivity : ComponentActivity() {
         }
         
         // Check if our service is the default for the AID
-        val isDefault = cardEmulation.isDefaultServiceForAid(component, "F043525950544F")
+        val isDefault = cardEmulation.isDefaultServiceForAid(component, "F046524545504159")
         Log.d(TAG, "Is default service for AID: $isDefault")
         
         // Get list of registered AIDs for our service
@@ -360,7 +360,7 @@ fun MainContent(
                     text = "1. Select your preferred wallet app.\n" +
                             "2. Copy your wallet address in the wallet app.\n" +
                             "3. Paste your wallet address into FreePay.\n\n" +
-                          "FreePay must be running in the background when tapping a FreePay POS terminal for payment.",
+                          "FreePay may need to be running in the background when tapping a FreePay POS terminal for payment.",
                     style = MaterialTheme.typography.bodyMedium
                 )
             }
