@@ -360,7 +360,7 @@ fun MainContent(
                     text = "1. Select your preferred wallet app.\n" +
                             "2. Copy your wallet address in the wallet app.\n" +
                             "3. Paste your wallet address into FreePay.\n\n" +
-                          "FreePay must be running in the background when tapping a FreePay POS terminal for payment.",
+                          "FreePay may need to be running in the background when tapping a FreePay POS terminal for payment.",
                     style = MaterialTheme.typography.bodyMedium
                 )
             }
