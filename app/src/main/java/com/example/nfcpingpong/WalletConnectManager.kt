@@ -16,11 +16,11 @@ import kotlinx.coroutines.selects.select
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
 import java.util.UUID
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleObserver
-import androidx.lifecycle.OnLifecycleEvent
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import android.app.Activity
+import android.content.pm.PackageManager
 
 data class WalletConnectionState(
     val isConnecting: Boolean = false,
@@ -30,7 +30,7 @@ data class WalletConnectionState(
     val connectionStep: String? = null
 )
 
-class WalletConnectManager(private val context: Context) : LifecycleObserver {
+class WalletConnectManager(private val context: Context) : DefaultLifecycleObserver {
     private val TAG = "WalletConnectManager"
     
     private val _connectionState = MutableStateFlow(WalletConnectionState())
@@ -45,6 +45,7 @@ class WalletConnectManager(private val context: Context) : LifecycleObserver {
     private var isAppInForeground = true
     private var lastClipboardCheck = 0L
     private var pendingClipboardCheck: String? = null
+    private var clipboardPrimed = false
     
     // Broadcast receiver for wallet responses
     private val walletResponseReceiver = object : BroadcastReceiver() {
@@ -87,8 +88,7 @@ class WalletConnectManager(private val context: Context) : LifecycleObserver {
         ProcessLifecycleOwner.get().lifecycle.addObserver(this)
     }
     
-    @OnLifecycleEvent(Lifecycle.Event.ON_START)
-    fun onAppForegrounded() {
+    override fun onStart(owner: LifecycleOwner) {
         Log.d(TAG, "📱 App returned to foreground")
         isAppInForeground = true
         
@@ -100,8 +100,7 @@ class WalletConnectManager(private val context: Context) : LifecycleObserver {
         }
     }
     
-    @OnLifecycleEvent(Lifecycle.Event.ON_STOP)
-    fun onAppBackgrounded() {
+    override fun onStop(owner: LifecycleOwner) {
         Log.d(TAG, "📱 App went to background")
         isAppInForeground = false
     }
@@ -776,24 +775,43 @@ class WalletConnectManager(private val context: Context) : LifecycleObserver {
     }
     
     /**
+     * Prime clipboard with a marker to detect when user copies address
+     */
+    private fun primeClipboard() {
+        try {
+            val clipboardManager = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            val clip = android.content.ClipData.newPlainText("FreePay", "Waiting for wallet address...")
+            clipboardManager.setPrimaryClip(clip)
+            clipboardPrimed = true
+            Log.d(TAG, "📋 Clipboard primed for address detection")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to prime clipboard: ${e.message}")
+        }
+    }
+    
+    /**
      * Wait for app to resume and check clipboard when user returns
      */
     private suspend fun waitForAddressOnResume(sessionId: String, timeoutMs: Long): String? = withContext(Dispatchers.IO) {
         Log.d(TAG, "⏳ Enhanced clipboard monitoring started (${timeoutMs}ms timeout)")
         
+        // Prime clipboard before switching to wallet
+        primeClipboard()
+        
         // Store session for foreground check
         pendingClipboardCheck = sessionId
         
         val startTime = System.currentTimeMillis()
-        var lastClipboardContent: String? = null
+        var lastClipboardContent: String? = if (clipboardPrimed) "Waiting for wallet address..." else null
         var lastValidCheck = 0L
-        val checkInterval = 500L // Check every 500ms when in foreground
+        val checkInterval = 300L // Check every 300ms when in foreground for faster response
         
         // First, try immediate check if we're in foreground
         if (isAppInForeground) {
             val immediateResult = checkClipboardNow()
             if (immediateResult != null) {
                 pendingClipboardCheck = null
+                clipboardPrimed = false
                 return@withContext immediateResult
             }
         }
@@ -820,6 +838,7 @@ class WalletConnectManager(private val context: Context) : LifecycleObserver {
                             if (isValidEthereumAddress(trimmedText)) {
                                 Log.i(TAG, "✅ Found valid Ethereum address: ${trimmedText.take(6)}...${trimmedText.takeLast(4)}")
                                 pendingClipboardCheck = null
+                                clipboardPrimed = false
                                 return@withContext trimmedText
                             }
                             
