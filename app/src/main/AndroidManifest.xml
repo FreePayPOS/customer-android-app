@@ -75,7 +75,7 @@
         
         <!-- Direct wallet address requests -->
         <intent>
-            <action android:name="com.freepaypos.REQUEST_ADDRESS" />
+            <action android:name="org.freepay.REQUEST_ADDRESS" />
         </intent>
         
         <!-- Specific wallet packages -->

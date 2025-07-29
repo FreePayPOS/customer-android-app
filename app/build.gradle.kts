@@ -5,11 +5,11 @@ plugins {
 }
 
 android {
-    namespace = "com.freepaypos"
+    namespace = "org.freepay"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.freepaypos"
+        applicationId = "org.freepay"
         minSdk = 24
         targetSdk = 35
         versionCode = 1
