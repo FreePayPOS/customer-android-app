@@ -16,6 +16,11 @@ import kotlinx.coroutines.selects.select
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
 import java.util.UUID
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleObserver
+import androidx.lifecycle.OnLifecycleEvent
+import androidx.lifecycle.ProcessLifecycleOwner
+import android.app.Activity
 
 data class WalletConnectionState(
     val isConnecting: Boolean = false,
@@ -25,7 +30,7 @@ data class WalletConnectionState(
     val connectionStep: String? = null
 )
 
-class WalletConnectManager(private val context: Context) {
+class WalletConnectManager(private val context: Context) : LifecycleObserver {
     private val TAG = "WalletConnectManager"
     
     private val _connectionState = MutableStateFlow(WalletConnectionState())
@@ -35,6 +40,11 @@ class WalletConnectManager(private val context: Context) {
     
     // Map to track pending address requests
     private val pendingRequests = mutableMapOf<String, kotlin.coroutines.Continuation<String?>>()
+    
+    // Track app foreground state
+    private var isAppInForeground = true
+    private var lastClipboardCheck = 0L
+    private var pendingClipboardCheck: String? = null
     
     // Broadcast receiver for wallet responses
     private val walletResponseReceiver = object : BroadcastReceiver() {
@@ -52,12 +62,19 @@ class WalletConnectManager(private val context: Context) {
         private const val EXTRA_WALLET_ADDRESS = "wallet_address"
         private const val EXTRA_SESSION_ID = "session_id"
         private const val EXTRA_SUCCESS = "success"
+        
+        // Standard Web3 intent action
+        private const val ACTION_GET_ADDRESS = "com.web3.WALLET_GET_ADDRESS"
+        private const val EXTRA_CHAIN_ID = "chain_id"
+        private const val EXTRA_REQUESTING_APP = "requesting_app"
+        private const val EXTRA_CALLBACK_ACTION = "callback_action"
     }
     
     init {
         // Register broadcast receiver for wallet responses
         val filter = IntentFilter().apply {
             addAction(ACTION_WALLET_ADDRESS_RESPONSE)
+            addAction(ACTION_GET_ADDRESS + ".RESPONSE")
         }
         try {
             context.registerReceiver(walletResponseReceiver, filter)
@@ -65,6 +82,28 @@ class WalletConnectManager(private val context: Context) {
         } catch (e: Exception) {
             Log.e(TAG, "❌ Failed to register broadcast receiver: ${e.message}")
         }
+        
+        // Register lifecycle observer
+        ProcessLifecycleOwner.get().lifecycle.addObserver(this)
+    }
+    
+    @OnLifecycleEvent(Lifecycle.Event.ON_START)
+    fun onAppForegrounded() {
+        Log.d(TAG, "📱 App returned to foreground")
+        isAppInForeground = true
+        
+        // Check clipboard immediately when app returns to foreground
+        pendingClipboardCheck?.let { sessionId ->
+            scope.launch {
+                checkClipboardImmediate(sessionId)
+            }
+        }
+    }
+    
+    @OnLifecycleEvent(Lifecycle.Event.ON_STOP)
+    fun onAppBackgrounded() {
+        Log.d(TAG, "📱 App went to background")
+        isAppInForeground = false
     }
     
     /**
@@ -107,15 +146,29 @@ class WalletConnectManager(private val context: Context) {
         
         val sessionId = UUID.randomUUID().toString()
         
-        val connectionUris = listOf(
-            "metamask://dapp/$DAPP_URL?method=eth_requestAccounts&sessionId=$sessionId&name=${Uri.encode(DAPP_NAME)}",
-            "https://metamask.app.link/dapp/$DAPP_URL?method=eth_requestAccounts&name=${Uri.encode(DAPP_NAME)}",
-            "metamask://connect?name=${Uri.encode(DAPP_NAME)}&url=$DAPP_URL",
-            "metamask://"
-        )
-        
-        if (openWalletWithSmartConnection("io.metamask", "MetaMask", connectionUris)) {
-            scope.launch {
+        scope.launch {
+            // First try standard Web3 intent
+            _connectionState.value = WalletConnectionState(
+                isConnecting = true,
+                connectionStep = "Attempting to connect to MetaMask..."
+            )
+            
+            val web3Address = tryStandardWeb3Intent("io.metamask", sessionId)
+            if (web3Address != null) {
+                Log.i(TAG, "🎉 Successfully retrieved MetaMask address via Web3 intent!")
+                continuation.resume(web3Address)
+                return@launch
+            }
+            
+            // Fall back to opening wallet with clipboard monitoring
+            val connectionUris = listOf(
+                "metamask://dapp/$DAPP_URL?method=eth_requestAccounts&sessionId=$sessionId&name=${Uri.encode(DAPP_NAME)}",
+                "https://metamask.app.link/dapp/$DAPP_URL?method=eth_requestAccounts&name=${Uri.encode(DAPP_NAME)}",
+                "metamask://connect?name=${Uri.encode(DAPP_NAME)}&url=$DAPP_URL",
+                "metamask://"
+            )
+            
+            if (openWalletWithSmartConnection("io.metamask", "MetaMask", connectionUris)) {
                 _connectionState.value = WalletConnectionState(
                     isConnecting = true,
                     connectionStep = "Opening MetaMask to your portfolio view..."
@@ -144,9 +197,9 @@ class WalletConnectManager(private val context: Context) {
                     )
                     continuation.resume(null)
                 }
+            } else {
+                continuation.resume(null)
             }
-        } else {
-            continuation.resume(null)
         }
     }
     
@@ -536,24 +589,43 @@ class WalletConnectManager(private val context: Context) {
     }
 
     private fun connectGenericWalletWithAutoRetrieve(continuation: kotlin.coroutines.Continuation<String?>, walletPackageName: String) {
-        Log.d(TAG, "🔗 Connecting to $walletPackageName with auto-retrieval...")
+        Log.d(TAG, "🔗 Connecting to $walletPackageName with enhanced auto-retrieval...")
         
         val sessionId = UUID.randomUUID().toString()
         val walletName = getWalletDisplayName(walletPackageName)
         
-        val connectionUris = listOf(
-            "ethereum://connect?name=${Uri.encode(DAPP_NAME)}&url=$DAPP_URL&sessionId=$sessionId",
-            "wallet://connect?name=${Uri.encode(DAPP_NAME)}&url=$DAPP_URL",
-            "web3://connect?dapp=$DAPP_URL"
-        )
-        
-        if (openWalletWithSmartConnection(walletPackageName, walletName, connectionUris)) {
-            scope.launch {
+        scope.launch {
+            // First try standard Web3 intent
+            _connectionState.value = WalletConnectionState(
+                isConnecting = true,
+                connectionStep = "Attempting to connect to $walletName..."
+            )
+            
+            val web3Address = tryStandardWeb3Intent(walletPackageName, sessionId)
+            if (web3Address != null) {
+                Log.i(TAG, "🎉 Successfully retrieved $walletName address via Web3 intent!")
+                continuation.resume(web3Address)
+                return@launch
+            }
+            
+            // Fall back to opening wallet with enhanced clipboard monitoring
+            val connectionUris = listOf(
+                "ethereum://connect?name=${Uri.encode(DAPP_NAME)}&url=$DAPP_URL&sessionId=$sessionId",
+                "wallet://connect?name=${Uri.encode(DAPP_NAME)}&url=$DAPP_URL",
+                "web3://connect?dapp=$DAPP_URL"
+            )
+            
+            if (openWalletWithSmartConnection(walletPackageName, walletName, connectionUris)) {
                 _connectionState.value = WalletConnectionState(
                     isConnecting = true,
                     connectionStep = "$walletName opened - establishing connection..."
                 )
                 delay(2000)
+                
+                _connectionState.value = WalletConnectionState(
+                    isConnecting = true,
+                    connectionStep = "💡 Please copy your wallet address and return to this app"
+                )
                 
                 val autoRetrievedAddress = attemptAutoAddressRetrieval(walletPackageName, sessionId)
                 
@@ -571,9 +643,9 @@ class WalletConnectManager(private val context: Context) {
                     )
                     continuation.resume(null)
                 }
+            } else {
+                continuation.resume(null)
             }
-        } else {
-            continuation.resume(null)
         }
     }
     
@@ -707,46 +779,107 @@ class WalletConnectManager(private val context: Context) {
      * Wait for app to resume and check clipboard when user returns
      */
     private suspend fun waitForAddressOnResume(sessionId: String, timeoutMs: Long): String? = withContext(Dispatchers.IO) {
-        Log.d(TAG, "⏳ Waiting for user to return with address (${timeoutMs}ms timeout)")
+        Log.d(TAG, "⏳ Enhanced clipboard monitoring started (${timeoutMs}ms timeout)")
+        
+        // Store session for foreground check
+        pendingClipboardCheck = sessionId
         
         val startTime = System.currentTimeMillis()
+        var lastClipboardContent: String? = null
+        var lastValidCheck = 0L
+        val checkInterval = 500L // Check every 500ms when in foreground
         
-        // Set up a periodic check that will work when app comes back to foreground
-        while (System.currentTimeMillis() - startTime < timeoutMs) {
-            try {
-                // This check will only succeed when our app regains focus
-                val clipboardManager = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                val clipData = clipboardManager.primaryClip
-                
-                if (clipData != null && clipData.itemCount > 0) {
-                    val clipText = clipData.getItemAt(0).text?.toString()
-                    
-                    if (clipText != null) {
-                        // Check if it's a valid Ethereum address
-                        if (isValidEthereumAddress(clipText.trim())) {
-                            Log.i(TAG, "✅ Found valid Ethereum address: ${clipText.trim().take(6)}...${clipText.trim().takeLast(4)}")
-                            return@withContext clipText.trim()
-                        }
-                        
-                        // Check if clipboard contains text with an address pattern
-                        val addressPattern = Regex("0x[a-fA-F0-9]{40}")
-                        val match = addressPattern.find(clipText)
-                        if (match != null && isValidEthereumAddress(match.value)) {
-                            Log.i(TAG, "✅ Found valid Ethereum address pattern: ${match.value.take(6)}...${match.value.takeLast(4)}")
-                            return@withContext match.value
-                        }
-                    }
-                }
-            } catch (e: Exception) {
-                // Expected when app is in background - clipboard access denied
-                Log.d(TAG, "Clipboard check (expected when backgrounded): ${e.message}")
+        // First, try immediate check if we're in foreground
+        if (isAppInForeground) {
+            val immediateResult = checkClipboardNow()
+            if (immediateResult != null) {
+                pendingClipboardCheck = null
+                return@withContext immediateResult
             }
-            
-            delay(2000) // Check every 2 seconds instead of aggressive polling
         }
         
-        Log.d(TAG, "⏰ Address waiting timeout after ${timeoutMs}ms")
+        while (System.currentTimeMillis() - startTime < timeoutMs) {
+            val now = System.currentTimeMillis()
+            
+            // Only check clipboard if app is in foreground and enough time has passed
+            if (isAppInForeground && now - lastValidCheck >= checkInterval) {
+                try {
+                    val clipboardManager = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    val clipData = clipboardManager.primaryClip
+                    
+                    if (clipData != null && clipData.itemCount > 0) {
+                        val clipText = clipData.getItemAt(0).text?.toString()
+                        
+                        // Only process if clipboard content changed
+                        if (clipText != null && clipText != lastClipboardContent) {
+                            lastClipboardContent = clipText
+                            Log.d(TAG, "📋 New clipboard content detected")
+                            
+                            // Check if it's a valid Ethereum address
+                            val trimmedText = clipText.trim()
+                            if (isValidEthereumAddress(trimmedText)) {
+                                Log.i(TAG, "✅ Found valid Ethereum address: ${trimmedText.take(6)}...${trimmedText.takeLast(4)}")
+                                pendingClipboardCheck = null
+                                return@withContext trimmedText
+                            }
+                            
+                            // Check if clipboard contains text with an address pattern
+                            val addressPattern = Regex("0x[a-fA-F0-9]{40}")
+                            val match = addressPattern.find(clipText)
+                            if (match != null && isValidEthereumAddress(match.value)) {
+                                Log.i(TAG, "✅ Found valid Ethereum address pattern: ${match.value.take(6)}...${match.value.takeLast(4)}")
+                                pendingClipboardCheck = null
+                                return@withContext match.value
+                            }
+                        }
+                    }
+                    
+                    lastValidCheck = now
+                } catch (e: Exception) {
+                    // Expected when app is in background
+                    if (isAppInForeground) {
+                        Log.w(TAG, "Clipboard check failed while in foreground: ${e.message}")
+                    }
+                }
+            }
+            
+            // Use shorter delay when in foreground
+            delay(if (isAppInForeground) checkInterval else 2000L)
+        }
+        
+        pendingClipboardCheck = null
+        Log.d(TAG, "⏰ Enhanced clipboard monitoring timeout after ${timeoutMs}ms")
         return@withContext null
+    }
+    
+    /**
+     * Immediate clipboard check
+     */
+    private fun checkClipboardNow(): String? {
+        try {
+            val clipboardManager = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            val clipData = clipboardManager.primaryClip
+            
+            if (clipData != null && clipData.itemCount > 0) {
+                val clipText = clipData.getItemAt(0).text?.toString()
+                
+                if (clipText != null) {
+                    val trimmedText = clipText.trim()
+                    if (isValidEthereumAddress(trimmedText)) {
+                        return trimmedText
+                    }
+                    
+                    val addressPattern = Regex("0x[a-fA-F0-9]{40}")
+                    val match = addressPattern.find(clipText)
+                    if (match != null && isValidEthereumAddress(match.value)) {
+                        return match.value
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.d(TAG, "Immediate clipboard check failed: ${e.message}")
+        }
+        return null
     }
     
     /**
@@ -1372,11 +1505,114 @@ class WalletConnectManager(private val context: Context) {
     }
     
     /**
+     * Check clipboard immediately when app returns to foreground
+     */
+    private suspend fun checkClipboardImmediate(sessionId: String) {
+        try {
+            val clipboardManager = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            val clipData = clipboardManager.primaryClip
+            
+            if (clipData != null && clipData.itemCount > 0) {
+                val clipText = clipData.getItemAt(0).text?.toString()
+                
+                if (clipText != null) {
+                    // Check if it's a valid Ethereum address
+                    if (isValidEthereumAddress(clipText.trim())) {
+                        Log.i(TAG, "✅ Found valid Ethereum address on foreground return: ${clipText.trim().take(6)}...${clipText.trim().takeLast(4)}")
+                        handleAddressFound(clipText.trim(), sessionId)
+                        return
+                    }
+                    
+                    // Check if clipboard contains text with an address pattern
+                    val addressPattern = Regex("0x[a-fA-F0-9]{40}")
+                    val match = addressPattern.find(clipText)
+                    if (match != null && isValidEthereumAddress(match.value)) {
+                        Log.i(TAG, "✅ Found valid Ethereum address pattern on foreground return: ${match.value.take(6)}...${match.value.takeLast(4)}")
+                        handleAddressFound(match.value, sessionId)
+                        return
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.d(TAG, "Immediate clipboard check failed: ${e.message}")
+        }
+    }
+    
+    /**
+     * Handle when an address is found
+     */
+    private fun handleAddressFound(address: String, sessionId: String) {
+        pendingClipboardCheck = null
+        val continuation = pendingRequests.remove(sessionId)
+        if (continuation != null) {
+            _connectionState.value = WalletConnectionState(
+                isConnected = true,
+                address = address,
+                connectionStep = "Successfully retrieved wallet address!"
+            )
+            continuation.resume(address)
+        }
+    }
+    
+    /**
+     * Try to get address via standard Web3 intent first
+     */
+    private suspend fun tryStandardWeb3Intent(walletPackageName: String, sessionId: String): String? = withContext(Dispatchers.IO) {
+        Log.d(TAG, "🎯 Trying standard Web3 intent for $walletPackageName")
+        
+        return@withContext suspendCoroutine { continuation ->
+            pendingRequests[sessionId] = continuation
+            
+            try {
+                val intent = Intent(ACTION_GET_ADDRESS).apply {
+                    setPackage(walletPackageName)
+                    putExtra(EXTRA_REQUESTING_APP, context.packageName)
+                    putExtra(EXTRA_SESSION_ID, sessionId)
+                    putExtra(EXTRA_CHAIN_ID, "1") // Ethereum mainnet
+                    putExtra(EXTRA_CALLBACK_ACTION, ACTION_WALLET_ADDRESS_RESPONSE)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                
+                // Check if wallet can handle this intent
+                val resolveInfo = context.packageManager.resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY)
+                if (resolveInfo != null) {
+                    Log.d(TAG, "✅ Wallet supports Web3 standard intent!")
+                    context.startActivity(intent)
+                    
+                    // Set up timeout
+                    scope.launch {
+                        delay(15000) // 15 second timeout
+                        if (pendingRequests.containsKey(sessionId)) {
+                            Log.d(TAG, "⏰ Web3 intent timeout for session $sessionId")
+                            pendingRequests.remove(sessionId)
+                            continuation.resume(null)
+                        }
+                    }
+                } else {
+                    Log.d(TAG, "❌ Wallet does not support Web3 standard intent")
+                    pendingRequests.remove(sessionId)
+                    continuation.resume(null)
+                }
+                
+            } catch (e: Exception) {
+                Log.d(TAG, "Web3 intent failed: ${e.message}")
+                pendingRequests.remove(sessionId)
+                continuation.resume(null)
+            }
+        }
+    }
+    
+    /**
      * Handle incoming wallet address responses
      */
     private fun handleWalletResponse(intent: Intent?) {
-        if (intent?.action != ACTION_WALLET_ADDRESS_RESPONSE) return
-        
+        when (intent?.action) {
+            ACTION_WALLET_ADDRESS_RESPONSE -> handleLegacyResponse(intent)
+            ACTION_GET_ADDRESS + ".RESPONSE" -> handleWeb3Response(intent)
+        }
+    }
+    
+    private fun handleLegacyResponse(intent: Intent) {
         val sessionId = intent.getStringExtra(EXTRA_SESSION_ID)
         val address = intent.getStringExtra(EXTRA_WALLET_ADDRESS)
         val success = intent.getBooleanExtra(EXTRA_SUCCESS, false)
@@ -1395,6 +1631,20 @@ class WalletConnectManager(private val context: Context) {
             }
         } else {
             Log.w(TAG, "⚠️ Received response for unknown or expired session: $sessionId")
+        }
+    }
+    
+    private fun handleWeb3Response(intent: Intent) {
+        val sessionId = intent.getStringExtra(EXTRA_SESSION_ID)
+        val address = intent.getStringExtra("address")
+        val chainId = intent.getStringExtra("chain_id")
+        
+        Log.d(TAG, "🌐 Received Web3 response - Session: $sessionId, Chain: $chainId, Address: ${address?.take(6)}...${address?.takeLast(4)}")
+        
+        if (sessionId != null && address != null && isValidEthereumAddress(address)) {
+            handleAddressFound(address, sessionId)
+        } else {
+            pendingRequests.remove(sessionId)?.resume(null)
         }
     }
     
