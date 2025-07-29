@@ -41,7 +41,7 @@ Go to Android Settings → Connections → NFC and enable it.
 
 ### NFC Protocol
 
-- **AID**: `F043525950544F` (proprietary, non-payment card)
+- **AID**: `F046524545504159` (F0 + FREEPAY in Hex)
 - **Commands**: SELECT, PAYMENT (handles both EIP-681 URIs and wallet:address)
 - **Response**: Stored wallet address or fallback address
 

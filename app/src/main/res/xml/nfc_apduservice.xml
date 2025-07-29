@@ -5,8 +5,6 @@
 
     <aid-group android:category="other"
         android:description="@string/aid_demo_desc">
-        <!-- Use a proper proprietary AID that won't conflict with payment cards -->
-        <!-- Format: D27600xxxx... where D276 is registered for proprietary use -->
-        <aid-filter android:name="F043525950544F"/> <!-- 8 bytes, proprietary AID -->
+        <aid-filter android:name="F046524545504159"/> <!-- 8 bytes, F0 + FREEPAY in Hex -->
     </aid-group>
 </host-apdu-service>
