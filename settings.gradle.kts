@@ -21,5 +21,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "FreePayPOS"
+rootProject.name = "FreePay"
 include(":app")
