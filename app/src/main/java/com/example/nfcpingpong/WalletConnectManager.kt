@@ -400,26 +400,39 @@ class WalletConnectManager(private val context: Context) : DefaultLifecycleObser
         
         val sessionId = UUID.randomUUID().toString()
         
-        val connectionUris = listOf(
-            "daimo://dapp/$DAPP_URL?method=eth_requestAccounts&sessionId=$sessionId",
-            "https://daimo.com/link/dapp/$DAPP_URL?method=eth_requestAccounts",
-            "daimo://connect?name=${Uri.encode(DAPP_NAME)}&url=$DAPP_URL&sessionId=$sessionId",
-            "daimo://"
-        )
-        
-        if (openWalletWithSmartConnection("com.daimo", "Daimo", connectionUris)) {
-            scope.launch {
+        scope.launch {
+            // First try standard Web3 intent
+            _connectionState.value = WalletConnectionState(
+                isConnecting = true,
+                connectionStep = "Attempting to connect to Daimo..."
+            )
+            
+            val web3Address = tryStandardWeb3Intent("com.daimo", sessionId)
+            if (web3Address != null) {
+                Log.i(TAG, "🎉 Successfully retrieved Daimo address via Web3 intent!")
+                continuation.resume(web3Address)
+                return@launch
+            }
+            
+            // For Daimo, just open the app normally without deep links
+            val packageManager = context.packageManager
+            val launchIntent = packageManager.getLaunchIntentForPackage("com.daimo")
+            
+            if (launchIntent != null) {
+                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(launchIntent)
+                Log.d(TAG, "✅ Opened Daimo directly")
+                
                 _connectionState.value = WalletConnectionState(
                     isConnecting = true,
-                    connectionStep = "Daimo opened - requesting account access..."
+                    connectionStep = "Daimo opened - please navigate to your account..."
                 )
                 delay(2000)
                 
                 _connectionState.value = WalletConnectionState(
                     isConnecting = true,
-                    connectionStep = "Please approve the connection request in Daimo"
+                    connectionStep = "💡 In Daimo: copy your wallet address and return to this app"
                 )
-                delay(3000)
                 
                 val autoRetrievedAddress = attemptAutoAddressRetrieval("com.daimo", sessionId)
                 
@@ -437,9 +450,13 @@ class WalletConnectManager(private val context: Context) : DefaultLifecycleObser
                     )
                     continuation.resume(null)
                 }
+            } else {
+                Log.e(TAG, "❌ Failed to open Daimo")
+                _connectionState.value = WalletConnectionState(
+                    error = "Failed to open Daimo. Please make sure it's installed."
+                )
+                continuation.resume(null)
             }
-        } else {
-            continuation.resume(null)
         }
     }
     
