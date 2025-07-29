@@ -29,6 +29,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
@@ -178,13 +181,11 @@ class MainActivity : ComponentActivity() {
                         )
                     } else {
                         MainContent(
-                            nfcData = nfcDataState,
                             walletSelection = walletSelection,
                             onSelectWallet = { 
                                 // Just show wallet selection screen, don't disconnect yet
                                 showWalletSelection = true
                             },
-                            onTestCardService = { testCardService() },
                             modifier = Modifier.padding(innerPadding)
                         )
                     }
@@ -257,29 +258,6 @@ class MainActivity : ComponentActivity() {
         Log.i(TAG, "Selected wallet: ${wallet.appName} (${wallet.packageName}) with address: $address")
     }
 
-    private fun testCardService() {
-        Log.d(TAG, "=== TESTING CARD SERVICE ===")
-        
-        // Create a test CardService instance to verify it's working
-        val testService = CardService()
-        testService.onCreate()
-        
-        // Test the SELECT command with new AID
-        val selectCommand = byteArrayOf(0x00, 0xA4.toByte(), 0x04, 0x00, 0x08, 0xD2.toByte(), 0x76, 0x00, 0x00, 0x85.toByte(), 0x01, 0x01)
-        Log.d(TAG, "Testing SELECT command...")
-        val selectResponse = testService.processCommandApdu(selectCommand, null)
-        Log.d(TAG, "SELECT response: ${selectResponse.joinToString { String.format("%02X", it) }}")
-        
-        // Test the GET command
-        val getCommand = byteArrayOf(0x80.toByte(), 0xCA.toByte(), 0x00, 0x00, 0x00)
-        Log.d(TAG, "Testing GET command...")
-        val getResponse = testService.processCommandApdu(getCommand, null)
-        Log.d(TAG, "GET response: ${getResponse.joinToString { String.format("%02X", it) }}")
-        
-        Log.d(TAG, "=== END CARD SERVICE TEST ===")
-        
-        nfcDataState = "CardService test completed - check logs"
-    }
 
     override fun onDestroy() {
         super.onDestroy()
@@ -294,10 +272,8 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun MainContent(
-    nfcData: String,
     walletSelection: WalletSelection?,
     onSelectWallet: () -> Unit,
-    onTestCardService: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -306,33 +282,17 @@ fun MainContent(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // NFC Status
-        Card(
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(
-                modifier = Modifier.padding(16.dp)
-            ) {
-                Text(
-                    text = "NFC Status",
-                    style = MaterialTheme.typography.titleMedium
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = nfcData,
-                    style = MaterialTheme.typography.bodyMedium
-                )
-                
-                // Add test button for debugging
-                Spacer(modifier = Modifier.height(8.dp))
-                Button(
-                    onClick = onTestCardService,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Test CardService")
-                }
-            }
-        }
+        // Logo
+        Image(
+            painter = painterResource(id = R.drawable.logo),
+            contentDescription = "FreePay Logo",
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(80.dp)
+                .padding(bottom = 8.dp),
+            contentScale = ContentScale.Fit,
+            alignment = Alignment.Center
+        )
         
         // Wallet Selection
         Card(
@@ -397,9 +357,10 @@ fun MainContent(
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "1. Select your preferred wallet app - address will be retrieved automatically\n" +
-                          "2. Hold your device near an NFC terminal\n" +
-                          "3. Payment requests will use your wallet address and open directly in your chosen wallet",
+                    text = "1. Select your preferred wallet app.\n" +
+                            "2. Copy your wallet address in the wallet app.\n" +
+                            "3. Paste your wallet address into FreePay.\n\n" +
+                          "FreePay must be running in the background when tapping a FreePay POS terminal for payment.",
                     style = MaterialTheme.typography.bodyMedium
                 )
             }
@@ -848,7 +809,6 @@ fun WalletSelectionScreen(
 fun MainContentPreview() {
     FreePayPOSTheme {
         MainContent(
-            nfcData = "Waiting for NFC data...",
             walletSelection = WalletSelection(
                 WalletApp("io.metamask", "MetaMask"),
                 "0x3f1214074399e56D0D7224056eb7f41c5E8619C4"
