@@ -128,6 +128,7 @@ class WalletConnectManager(private val context: Context) : DefaultLifecycleObser
                 "com.railway.rtp" -> connectRailwayWithAutoRetrieve(continuation)
                 "com.polybaselabs.wallet" -> connectPayyWithAutoRetrieve(continuation)
                 "money.stables" -> connectStablesWithAutoRetrieve(continuation)
+                "com.opera.minipay" -> connectOperaMiniPayWithAutoRetrieve(continuation)
                 else -> connectGenericWalletWithAutoRetrieve(continuation, walletPackageName)
             }
             
@@ -601,6 +602,68 @@ class WalletConnectManager(private val context: Context) : DefaultLifecycleObser
             }
         } else {
             continuation.resume(null)
+        }
+    }
+    
+    private fun connectOperaMiniPayWithAutoRetrieve(continuation: kotlin.coroutines.Continuation<String?>) {
+        Log.d(TAG, "💸 Connecting to Opera MiniPay with auto-retrieval...")
+        
+        val sessionId = UUID.randomUUID().toString()
+        
+        scope.launch {
+            // First try standard Web3 intent
+            _connectionState.value = WalletConnectionState(
+                isConnecting = true,
+                connectionStep = "Attempting to connect to Opera MiniPay..."
+            )
+            
+            val web3Address = tryStandardWeb3Intent("com.opera.minipay", sessionId)
+            if (web3Address != null) {
+                Log.i(TAG, "🎉 Successfully retrieved Opera MiniPay address via Web3 intent!")
+                continuation.resume(web3Address)
+                return@launch
+            }
+            
+            // Fall back to opening wallet with connection URIs
+            val connectionUris = listOf(
+                "minipay://dapp/$DAPP_URL?method=eth_requestAccounts&sessionId=$sessionId",
+                "https://minipay.to/dapp/$DAPP_URL?method=eth_requestAccounts",
+                "minipay://connect?name=${Uri.encode(DAPP_NAME)}&url=$DAPP_URL&sessionId=$sessionId",
+                "minipay://"
+            )
+            
+            if (openWalletWithSmartConnection("com.opera.minipay", "Opera MiniPay", connectionUris)) {
+                _connectionState.value = WalletConnectionState(
+                    isConnecting = true,
+                    connectionStep = "Opera MiniPay opened - requesting account access..."
+                )
+                delay(2000)
+                
+                _connectionState.value = WalletConnectionState(
+                    isConnecting = true,
+                    connectionStep = "💡 In Opera MiniPay: tap your account to copy the address, then return to this app"
+                )
+                delay(3000)
+                
+                val autoRetrievedAddress = attemptAutoAddressRetrieval("com.opera.minipay", sessionId)
+                
+                if (autoRetrievedAddress != null) {
+                    Log.i(TAG, "🎉 Auto-retrieved Opera MiniPay address: $autoRetrievedAddress")
+                    _connectionState.value = WalletConnectionState(
+                        isConnected = true,
+                        address = autoRetrievedAddress,
+                        connectionStep = "Successfully connected to Opera MiniPay!"
+                    )
+                    continuation.resume(autoRetrievedAddress)
+                } else {
+                    _connectionState.value = WalletConnectionState(
+                        connectionStep = "Connected to Opera MiniPay! Please copy your address and paste it below"
+                    )
+                    continuation.resume(null)
+                }
+            } else {
+                continuation.resume(null)
+            }
         }
     }
 
@@ -1756,6 +1819,8 @@ class WalletConnectManager(private val context: Context) : DefaultLifecycleObser
             "com.railway.rtp" -> "Railway Wallet"
             "com.polybaselabs.wallet" -> "Payy Wallet"
             "money.stables" -> "Stables"
+            "com.opera.minipay" -> "Opera MiniPay"
+            "com.avaxwallet" -> "Avalanche Wallet"
             else -> "Wallet"
         }
     }

@@ -98,6 +98,8 @@
         <package android:name="com.railway.rtp" />
         <package android:name="com.polybaselabs.wallet" />
         <package android:name="money.stables" />
+        <package android:name="com.opera.minipay" />
+        <package android:name="com.avaxwallet" />
     </queries>
 
     <application

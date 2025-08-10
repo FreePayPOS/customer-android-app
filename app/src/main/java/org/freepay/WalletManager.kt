@@ -47,7 +47,9 @@ class WalletManager(private val context: Context) {
             "com.daimo" to "Daimo",
             "com.railway.rtp" to "Railway Wallet",
             "com.polybaselabs.wallet" to "Payy Wallet",
-            "money.stables" to "Stables"
+            "money.stables" to "Stables",
+            "com.opera.minipay" to "Opera MiniPay",
+            "com.avaxwallet" to "Avalanche Wallet"
         )
     }
     
@@ -87,6 +89,19 @@ class WalletManager(private val context: Context) {
         
         // Method 2: Also check for known wallets that might not show up in the query
         Log.d(TAG, "Checking for known wallet packages...")
+        
+        // Special debug logging for MiniPay
+        Log.d(TAG, "Specifically checking for Opera MiniPay (com.opera.minipay)...")
+        try {
+            val miniPayInfo = pm.getPackageInfo("com.opera.minipay", 0)
+            Log.d(TAG, "✅ Opera MiniPay IS INSTALLED! Package found.")
+            val miniPayAppInfo = pm.getApplicationInfo("com.opera.minipay", 0)
+            val miniPayAppName = miniPayAppInfo.loadLabel(pm).toString()
+            Log.d(TAG, "MiniPay actual app name: $miniPayAppName")
+        } catch (e: PackageManager.NameNotFoundException) {
+            Log.d(TAG, "❌ Opera MiniPay (com.opera.minipay) NOT FOUND")
+        }
+        
         for ((packageName, displayName) in KNOWN_WALLETS) {
             // Skip if already found
             if (availableWallets.any { it.packageName == packageName }) {
@@ -95,7 +110,13 @@ class WalletManager(private val context: Context) {
             }
             
             try {
-                val packageInfo = pm.getPackageInfo(packageName, 0)
+                // Try with different flags for better app detection
+                val packageInfo = try {
+                    pm.getPackageInfo(packageName, 0)
+                } catch (e: Exception) {
+                    // Try with MATCH_UNINSTALLED_PACKAGES flag
+                    pm.getPackageInfo(packageName, PackageManager.MATCH_UNINSTALLED_PACKAGES)
+                }
                 val appInfo = pm.getApplicationInfo(packageName, 0)
                 val actualAppName = appInfo.loadLabel(pm).toString()
                 
@@ -103,11 +124,32 @@ class WalletManager(private val context: Context) {
                 Log.d(TAG, "Found known wallet: $displayName -> $actualAppName ($packageName)")
             } catch (e: PackageManager.NameNotFoundException) {
                 Log.d(TAG, "Known wallet $displayName ($packageName) not installed")
+                // Special check for Opera MiniPay variations
+                if (packageName.contains("opera") && packageName.contains("mini")) {
+                    Log.d(TAG, "Checking Opera MiniPay variations...")
+                    val variations = listOf(
+                        "com.opera.mini.native.beta",
+                        "com.opera.mini.native", 
+                        "com.opera.minipay.app",
+                        "com.minipay.app",
+                        "org.opera.minipay"
+                    )
+                    for (variant in variations) {
+                        try {
+                            val variantInfo = pm.getPackageInfo(variant, 0)
+                            Log.d(TAG, "Found Opera MiniPay variant: $variant")
+                            availableWallets.add(WalletApp(variant, displayName))
+                            break
+                        } catch (e2: PackageManager.NameNotFoundException) {
+                            // Continue checking
+                        }
+                    }
+                }
             }
         }
         
         // Method 3: Try more URI schemes that wallets might handle
-        val additionalSchemes = listOf("wc:", "wallet:", "ethereum:", "web3:")
+        val additionalSchemes = listOf("wc:", "wallet:", "ethereum:", "web3:", "minipay:", "celo:")
         for (scheme in additionalSchemes) {
             try {
                 val intent = Intent(Intent.ACTION_VIEW, Uri.parse(scheme))
@@ -145,6 +187,11 @@ class WalletManager(private val context: Context) {
      * Check if an app should be skipped during wallet detection
      */
     private fun shouldSkipApp(packageName: String): Boolean {
+        // Don't skip Opera MiniPay
+        if (packageName == "com.opera.minipay") {
+            return false
+        }
+        
         val skipPatterns = listOf(
             "browser", "chrome", "firefox", "edge", "opera", 
             "samsung.android", "google.", ".android.browser",
